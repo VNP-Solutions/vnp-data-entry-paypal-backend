@@ -1,0 +1,347 @@
+# =========================
+# PayPal Integration Project
+# =========================
+
+# Environment Variables & Secrets
+# ==============================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.staging
+.env.production
+
+# Sensitive Configuration Files
+config/production.json
+config/development.json
+config/local.json
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Node.js
+# =======
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+.nyc_output
+
+# Dependency directories
+jspm_packages/
+
+# Snowpack dependency directory (https://snowpack.dev/)
+web_modules/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional stylelint cache
+.stylelintcache
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# Next.js build output
+.next
+
+# Nuxt.js build / generate output
+.nuxt
+dist
+
+# Gatsby files
+.cache/
+public
+
+# Storybook build outputs
+.out
+.storybook-out
+
+# Temporary folders
+tmp/
+temp/
+
+# File Uploads & Processing
+# ========================
+uploads/
+public/files/*
+!public/files/.gitkeep
+*.xlsx
+*.xls
+*.csv
+upload-*.xlsx
+upload-*.xls
+processed-*.xlsx
+temp-*.xlsx
+
+# S3 Local Cache
+s3-cache/
+file-cache/
+
+# Database
+# ========
+# MongoDB dumps
+*.dump
+*.bson
+*.json.gz
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+# ====
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Payment Processing
+# ==================
+# PayPal test files
+paypal-test-*
+payment-test-*
+*.transaction
+test-payments/
+
+# Security Files
+# ==============
+# SSL certificates
+ssl/
+certs/
+*.crt
+*.key
+*.pem
+*.p12
+*.pfx
+
+# JWT secrets
+jwt-secret*
+auth-keys/
+
+# Encryption keys
+encryption-keys/
+*.aes
+
+# API Keys & Secrets
+api-keys/
+secrets/
+
+# IDE & Editors
+# =============
+# Visual Studio Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# WebStorm
+.webstorm/
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Operating Systems
+# =================
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+
+# Testing & Coverage
+# ==================
+# Jest
+coverage/
+.nyc_output/
+
+# Mocha
+test-results.xml
+
+# Testing artifacts
+test-uploads/
+test-files/
+mock-data/
+fixtures/generated/
+
+# Documentation
+# =============
+# Auto-generated docs
+docs/generated/
+api-docs/generated/
+
+# Build artifacts
+# ===============
+build/
+dist/
+lib/
+out/
+
+# Deployment
+# ==========
+# PM2
+.pm2/
+pids/
+logs/
+ecosystem.config.js
+
+# Docker
+.dockerignore
+Dockerfile.local
+docker-compose.override.yml
+
+# Kubernetes
+k8s-secrets.yaml
+*.secret.yaml
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+
+# AWS
+.aws/
+aws-config/
+.elasticbeanstalk/
+
+# Monitoring & Analytics
+# ======================
+# Application Performance Monitoring
+apm-*
+newrelic_agent.log
+.newrelic/
+
+# Error tracking
+sentry-debug-meta.properties
+
+# Backup files
+# ============
+*.backup
+*.bak
+*.swp
+*.tmp
+*~
+
+# Lock files (optional - uncomment if you want to ignore them)
+# package-lock.json
+# yarn.lock
+
+# Project specific
+# ================
+# Migration scripts results
+migration-results/
+migration-backups/
+
+# Performance testing
+performance-logs/
+load-test-results/
+
+# Security scan results
+security-reports/
+vulnerability-scans/
+
+# Local development
+dev-notes.md
+todo.md
+scratch.js
+
+# =========================
+# Important Notes:
+# =========================
+# 1. Never commit .env files containing sensitive data
+# 2. Always use environment variables for API keys
+# 3. Exclude uploaded files from version control
+# 4. Keep test files separate from production data
+# 5. Regular security audits of committed files
+# ========================= 

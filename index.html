@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Mermaid Diagram</title>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true });
+    </script>
+  </head>
+  <body>
+    <div class="mermaid">
+      graph TD subgraph "Client Layer" A["Web Client\n(Browser)"] B["File
+      Upload\n(Excel Files)"] C["Payment Form\n(Card Data)"] end subgraph
+      "Application Layer" D["Express.js Server\n(index.js)"] E["Auth
+      Controller\n(JWT + OTP)"] F["File Controller\n(Excel Processing)"]
+      G["PayPal Controller\n(Payment Processing)"] H["Auth Middleware\n(Token
+      Validation)"] end subgraph "Data Processing" I["Excel Parser\n(XLSX
+      Library)"] J["Data Validation\n(Duplicate Check)"] K["Encryption
+      Utils\n(Card Data)"] end subgraph "Storage Layer" L["MongoDB\n(User &
+      Excel Data)"] M["AWS S3\n(File Storage)"] end subgraph "External Services"
+      N["PayPal API\n(Payment Gateway)"] O["Email Service\n(Nodemailer)"] end
+      subgraph "Security Layers" P["CORS Protection"] Q["JWT Authentication"]
+      R["Data Encryption"] S["Input Validation"] end A --> D B --> D C --> D D
+      --> P D --> H H --> Q D --> E D --> F D --> G E --> L E --> O F --> I F
+      --> J F --> M I --> L G --> K G --> N K --> R J --> L classDef vulnerable
+      fill:#ffcccc,stroke:#ff0000,stroke-width:2px classDef secure
+      fill:#ccffcc,stroke:#00ff00,stroke-width:2px classDef warning
+      fill:#ffffcc,stroke:#ffaa00,stroke-width:2px class I,K,N vulnerable class
+      Q,R,S secure class D,E,F,G warning
+    </div>
+  </body>
+</html>
