@@ -3,6 +3,8 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const User = require('../models/User');
 const nodemailer = require('nodemailer');
+const dotenv = require('dotenv');
+dotenv.config();
 
 // JWT Secret (in production, use environment variable)
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -38,15 +40,11 @@ const register = async (req, res) => {
             });
         }
 
-        // Hash password
-        const saltRounds = 12;
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
-
-        // Create new user
+        // Create new user (let the model's pre-save middleware handle password hashing)
         const user = new User({
             name,
             email,
-            password: hashedPassword
+            password: password  // Pass the plain password, let the model hash it
         });
 
         await user.save();
@@ -126,6 +124,7 @@ async function sendOTPEmail(email, otp, userName) {
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;
+        console.log(email, password);
 
         // Validate input
         if (!email || !password) {
@@ -137,21 +136,25 @@ const login = async (req, res) => {
 
         // Find user by email
         const user = await User.findOne({ email });
+        console.log("first",user);
         if (!user) {
             return res.status(401).json({
                 status: 'error',
                 message: 'Invalid email or password'
             });
         }
+        
 
         // Check password
         const isPasswordValid = await bcrypt.compare(password, user.password);
+        
         if (!isPasswordValid) {
             return res.status(401).json({
                 status: 'error',
                 message: 'Invalid email or password'
             });
         }
+        console.log(isPasswordValid);
 
         // Generate OTP and session token
         const otp = generateOTP();
