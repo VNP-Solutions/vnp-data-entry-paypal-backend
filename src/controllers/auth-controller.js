@@ -417,12 +417,8 @@ const resetPassword = async (req, res) => {
             });
         }
 
-        // Hash new password
-        const saltRounds = 12;
-        const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
-
-        // Update user password and clear reset token and any OTP sessions
-        user.password = hashedPassword;
+        // Update user password (let the model's pre-save middleware handle hashing)
+        user.password = newPassword;
         user.resetPasswordToken = undefined;
         user.resetPasswordExpires = undefined;
         user.lastLogin = new Date(); // Update last login time
