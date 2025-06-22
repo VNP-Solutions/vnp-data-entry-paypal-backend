@@ -17,13 +17,14 @@ const upload = multer({
     storage: multerS3({
         s3: s3Client,
         bucket: process.env.AWS_S3_BUCKET,
+        contentType: multerS3.AUTO_CONTENT_TYPE,
         metadata: function (req, file, cb) {
             cb(null, { fieldName: file.fieldname });
         },
         key: function (req, file, cb) {
             // Generate unique filename with timestamp
             const timestamp = Date.now();
-            const fileName = `uploads/${req.user.userId}/${timestamp}-${file.originalname}`;
+            const fileName = `uploads/${req.user?.userId || 'anonymous'}/${timestamp}-${file.originalname}`;
             cb(null, fileName);
         }
     }),
