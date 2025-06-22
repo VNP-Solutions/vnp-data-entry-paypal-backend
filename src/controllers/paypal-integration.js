@@ -240,7 +240,7 @@ const processPayment = async (req, res) => {
             const updatedRecord = await ExcelData.findByIdAndUpdate(
                 documentId,
                 {
-                    'Charge status': 'Completed',
+                    'Charge status': 'Charged',
                     'Card first 4': encryptedCardData['Card first 4'],
                     'Card last 12': encryptedCardData['Card last 12'],
                     'Card Expire': encryptedCardData['Card Expire'],
