@@ -459,7 +459,10 @@ const getRowData = async (req, res) => {
             query.$or = [
                 { 'Reservation ID': searchRegex },
                 { 'Expedia ID': searchRegex },
-                { 'Hotel Name': searchRegex }
+                { 'Hotel Name': searchRegex },
+                { 'Name': searchRegex },
+                { 'Portfolio': searchRegex },
+                { 'Batch': searchRegex },    
             ];
         }
 
@@ -806,13 +809,19 @@ const getUploadStatus = async (req, res) => {
 const getUserUploadSessions = async (req, res) => {
     try {
         const userId = req.user.userId;
-        const { status, limit = 20, page = 1 } = req.query;
+        const { status, limit = 20, page = 1, search } = req.query;
 
         const query = { userId: userId };
         if (status) {
             query.status = status;
         }
 
+        if (search && search.trim() !== '') {
+            const searchRegex = { $regex: search, $options: 'i' }; // Case-insensitive search
+            query.$or = [
+                { 'fileName': searchRegex },
+            ];
+        }
         const sessions = await UploadSession.find(query)
             .sort({ createdAt: -1 })
             .limit(parseInt(limit))
