@@ -99,6 +99,7 @@ app.put('/api/auth/profile', authenticateToken, authController.updateProfile);
 // File Management API Routes (protected with S3 integration)
 app.post('/api/upload', authenticateToken, fileController.upload.single('file'), fileController.uploadFile);
 app.get('/api/get-row-data', authenticateToken, fileController.getRowData);
+app.get('/api/get-single-row-data/:documentId', authenticateToken, fileController.getSingleRowData);
 app.post('/api/update-sheet', authenticateToken, fileController.updateSheet);
 app.get('/api/user-files', authenticateToken, fileController.getUserFiles);
 app.get('/api/file-headers', authenticateToken, fileController.getFileHeaders);

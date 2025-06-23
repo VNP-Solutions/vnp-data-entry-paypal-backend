@@ -510,6 +510,48 @@ const getRowData = async (req, res) => {
         });
     }
 };
+// Get single row data for a user
+const getSingleRowData = async (req, res) => {
+    try {
+        const { documentId } = req.params;
+        const userId = req.user.userId;
+
+        const rowData = await ExcelData.findOne({
+            _id: documentId,
+            userId: userId
+        });
+
+        if (!rowData) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Row data not found'
+            });
+        }
+
+        // Remove MongoDB internal fields and userId, return only the Excel data
+        const { _id, userId: userIdField, __v, createdAt, updatedAt, ...excelData } = rowData.toObject();
+        
+        // Decrypt sensitive card data before returning
+        const decryptedData = decryptCardData(excelData);
+        
+        res.status(200).json({
+            status: 'success',
+            data: {
+                id: _id,
+                ...decryptedData,
+                createdAt: createdAt
+            }
+        });
+        
+    } catch (error) {
+        console.error('Get single row data error:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Error retrieving single row data',
+            error: error.message
+        });
+    }
+};
 
 // Update sheet data in database
 const updateSheet = async (req, res) => {
@@ -1056,6 +1098,7 @@ module.exports = {
     upload,
     uploadFile,
     getRowData,
+    getSingleRowData,
     updateSheet,
     getUserFiles,
     deleteFile,
