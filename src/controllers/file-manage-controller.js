@@ -23,24 +23,17 @@ function generateUploadId() {
     return `upload_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-// Optimized batch processing with efficient duplicate checking - GLOBAL DUPLICATE PREVENTION
-async function processBatchOptimized(excelDataRecords, uploadId, batchNumber, existingDuplicatesSet) {
+// Simplified batch processing without duplicate checking
+async function processBatch(excelDataRecords, uploadId, batchNumber) {
     try {
-        // Filter out duplicates using Set lookup (O(1) instead of O(n))
-        // Now checking globally across all users to prevent multiple payments
-        const filteredRecords = excelDataRecords.filter(record => {
-            const duplicateKey = `${record['Portfolio']}|${record['Reservation ID']}`;
-            return !existingDuplicatesSet.has(duplicateKey);
-        });
-
-        if (filteredRecords.length === 0) {
+        if (excelDataRecords.length === 0) {
             return 0;
         }
 
-        // Use bulkWrite for better performance with enhanced error handling
+        // Use bulkWrite for better performance
         try {
             const result = await ExcelData.bulkWrite(
-                filteredRecords.map(record => ({
+                excelDataRecords.map(record => ({
                     insertOne: { document: record }
                 })), 
                 { ordered: false } // Continue processing even if some records fail
@@ -48,53 +41,15 @@ async function processBatchOptimized(excelDataRecords, uploadId, batchNumber, ex
             
             return result.insertedCount;
         } catch (bulkWriteError) {
-            // Handle duplicate key errors gracefully (database-level safety net)
+            // Handle bulk write errors gracefully
             if (bulkWriteError.code === 11000 || bulkWriteError.name === 'BulkWriteError') {
                 const successfulInserts = bulkWriteError.result ? bulkWriteError.result.insertedCount : 0;
-                const duplicateErrors = bulkWriteError.writeErrors ? bulkWriteError.writeErrors.filter(err => err.code === 11000).length : 0;
-                
                 return successfulInserts;
             }
-            throw bulkWriteError; // Re-throw if it's not a duplicate key error
+            throw bulkWriteError;
         }
     } catch (error) {
         console.error(`Error processing batch ${batchNumber}:`, error);
-        throw error;
-    }
-}
-
-// Efficient duplicate checking using Set for O(1) lookup - GLOBAL CHECK ACROSS ALL USERS
-async function getExistingDuplicatesSet() {
-    try {
-        // Get all existing Portfolio + Reservation ID combinations from ALL users
-        const existingRecords = await ExcelData.find(
-            {}, // No userId filter - check across ALL users
-            { 'Portfolio': 1, 'Reservation ID': 1, userId: 1, uploadId: 1, fileName: 1 }
-        ).lean(); // Use lean() for better performance
-
-        // Create a Set for O(1) lookup with detailed duplicate info
-        const duplicatesSet = new Set();
-        const duplicateDetails = new Map(); // Store additional info about existing records
-        
-        existingRecords.forEach(record => {
-            const key = `${record['Portfolio']}|${record['Reservation ID']}`;
-            duplicatesSet.add(key);
-            
-            // Store details about the existing record for better error reporting
-            if (!duplicateDetails.has(key)) {
-                duplicateDetails.set(key, {
-                    existingUserId: record.userId,
-                    existingUploadId: record.uploadId,
-                    existingFileName: record.fileName,
-                    portfolio: record['Portfolio'],
-                    reservationId: record['Reservation ID']
-                });
-            }
-        });
-
-        return { duplicatesSet, duplicateDetails };
-    } catch (error) {
-        console.error('Error getting existing duplicates:', error);
         throw error;
     }
 }
@@ -134,7 +89,6 @@ const uploadFile = async (req, res) => {
         const fileName = req.file.originalname;
         const userId = req.user.userId;
         const vnpWorkId = req.body.vnpWorkId;
-        const skipDuplicateCheck = req.body.skipDuplicateCheck === 'true';
 
         // Check for existing upload session
         const existingCheck = await checkExistingUpload(fileName, userId);
@@ -150,8 +104,6 @@ const uploadFile = async (req, res) => {
                 }
             });
         }
-
-
 
         // Download file from S3 to process
         const fileBuffer = await s3Service.downloadFile(req.file.key);
@@ -185,8 +137,6 @@ const uploadFile = async (req, res) => {
             }
         }
 
-
-
         // Generate unique upload ID
         const uploadId = generateUploadId();
 
@@ -206,25 +156,10 @@ const uploadFile = async (req, res) => {
 
         await uploadSession.save({ session });
 
-        // Get existing duplicates Set for O(1) lookup (only if not skipping)
-        let existingDuplicatesSet = new Set();
-        let duplicateDetails = new Map();
-        let duplicateAnalysis = null;
-        let duplicateRows = [];
-        
-        if (!skipDuplicateCheck) {
-    
-            const { duplicatesSet, duplicateDetails: details } = await getExistingDuplicatesSet();
-            existingDuplicatesSet = duplicatesSet;
-            duplicateDetails = details;
-        }
-
-        // Process data in optimized batches
+        // Process data in batches
         const batchSize = 100;
         let totalProcessed = 0;
-        let totalDuplicates = 0;
         let batchNumber = 1;
-        const allRecords = []; // Collect all records for duplicate analysis
 
         // Process file in chunks to avoid memory issues
         for (let startRow = 1; startRow < totalRows; startRow += batchSize) {
@@ -280,38 +215,13 @@ const uploadFile = async (req, res) => {
 
                     const encryptedData = encryptCardData(mappedData);
                     excelDataRecords.push(encryptedData);
-                    
-                    // Collect for duplicate analysis
-                    allRecords.push({
-                        portfolio: rowObject['Portfolio'],
-                        reservationId: rowObject['Reservation ID'],
-                        expediaId: rowObject['Expedia ID'],
-                        rowNumber: row + 1,
-                        isDuplicate: !skipDuplicateCheck && existingDuplicatesSet.has(`${rowObject['Portfolio']}|${rowObject['Reservation ID']}`)
-                    });
                 }
             }
 
             // Process batch if there are records
             if (excelDataRecords.length > 0) {
-                const processedCount = await processBatchOptimized(excelDataRecords, uploadId, batchNumber, existingDuplicatesSet);
-                // For duplicate analysis, collect which rows were skipped
-                if (!skipDuplicateCheck) {
-                    excelDataRecords.forEach((record, idx) => {
-                        const orig = allRecords[allRecords.length - excelDataRecords.length + idx];
-                        const duplicateKey = `${record['Portfolio']}|${record['Reservation ID']}`;
-                        if (existingDuplicatesSet.has(duplicateKey)) {
-                            duplicateRows.push({
-                                rowNumber: orig.rowNumber,
-                                portfolio: orig.portfolio,
-                                reservationId: orig.reservationId,
-                                expediaId: orig.expediaId
-                            });
-                        }
-                    });
-                }
+                const processedCount = await processBatch(excelDataRecords, uploadId, batchNumber);
                 totalProcessed += processedCount;
-                totalDuplicates += (excelDataRecords.length - processedCount);
                 
                 // Update session progress
                 await UploadSession.findOneAndUpdate(
@@ -332,47 +242,6 @@ const uploadFile = async (req, res) => {
             }
         }
 
-        // Create duplicate analysis if needed
-        if (!skipDuplicateCheck) {
-            const totalRecords = allRecords.length;
-            // Find all duplicates for reporting with detailed information
-            duplicateRows = allRecords.filter(r => r.isDuplicate).map(r => {
-                const duplicateKey = `${r.portfolio}|${r.reservationId}`;
-                const existingRecord = duplicateDetails.get(duplicateKey);
-                
-                return {
-                    rowNumber: r.rowNumber,
-                    portfolio: r.portfolio,
-                    reservationId: r.reservationId,
-                    expediaId: r.expediaId,
-                    // Include info about who originally uploaded this record
-                    originallyUploadedBy: existingRecord ? {
-                        userId: existingRecord.existingUserId,
-                        uploadId: existingRecord.existingUploadId,
-                        fileName: existingRecord.existingFileName
-                    } : null,
-                    reason: 'Duplicate reservation already exists in system (prevents multiple payments)'
-                };
-            });
-            
-            duplicateAnalysis = {
-                totalRecords: totalRecords,
-                duplicateRecords: totalDuplicates,
-                newRecords: totalProcessed,
-                duplicatePercentage: totalRecords > 0 ? Math.round((totalDuplicates / totalRecords) * 100) : 0,
-                duplicates: duplicateRows,
-                summary: {
-                    willBeSkipped: totalDuplicates,
-                    willBeInserted: totalProcessed,
-                    recommendation: totalDuplicates > 0 ? 
-                        `${totalDuplicates} records were skipped to prevent duplicate payments. These Portfolio + Reservation ID combinations already exist in the system (uploaded by other users or previous uploads).` :
-                        'No duplicates found. All records were inserted.',
-                    globalDuplicateCheck: true,
-                    preventMultiplePayments: true
-                }
-            };
-        }
-
         // Mark session as completed
         await UploadSession.findOneAndUpdate(
             { uploadId: uploadId },
@@ -389,8 +258,6 @@ const uploadFile = async (req, res) => {
         // Commit transaction
         await session.commitTransaction();
 
-
-
         res.status(200).json({
             status: 'success',
             message: 'File uploaded and processed successfully',
@@ -401,8 +268,7 @@ const uploadFile = async (req, res) => {
                 totalColumns: totalCols,
                 rowsProcessed: totalProcessed,
                 headers: headers,
-                status: 'completed',
-                duplicateAnalysis: duplicateAnalysis
+                status: 'completed'
             }
         });
 
@@ -513,6 +379,7 @@ const getRowData = async (req, res) => {
         });
     }
 };
+
 // Get single row data for a user
 const getSingleRowData = async (req, res) => {
     try {
@@ -927,9 +794,6 @@ const resumeUpload = async (req, res) => {
         // Delete existing partial data for this upload
         await ExcelData.deleteMany({ uploadId: uploadId }, { session });
 
-        // Get existing duplicates Set for global checking during resume
-        const { duplicatesSet: existingDuplicatesSet } = await getExistingDuplicatesSet();
-
         // Process remaining data from where it left off
         const batchSize = uploadSession.batchSize || 100;
         let totalProcessed = 0;
@@ -991,7 +855,7 @@ const resumeUpload = async (req, res) => {
             }
 
             if (excelDataRecords.length > 0) {
-                const processedCount = await processBatchOptimized(excelDataRecords, uploadId, batchNumber, existingDuplicatesSet);
+                const processedCount = await processBatch(excelDataRecords, uploadId, batchNumber);
                 totalProcessed += processedCount;
                 
                 await UploadSession.findOneAndUpdate(

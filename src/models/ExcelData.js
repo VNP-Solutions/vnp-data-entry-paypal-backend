@@ -170,10 +170,9 @@ const excelDataSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Indexes for faster queries and duplicate prevention
+// Indexes for faster queries
 excelDataSchema.index({ userId: 1 });
 excelDataSchema.index({ uploadId: 1, rowNumber: 1 }, { unique: true });
-excelDataSchema.index({ 'Portfolio': 1, 'Reservation ID': 1 }, { unique: true });
 excelDataSchema.index({ 'Expedia ID': 1, userId: 1 });
 
 module.exports = mongoose.model('ExcelData', excelDataSchema); 
