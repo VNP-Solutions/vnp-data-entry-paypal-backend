@@ -64,6 +64,28 @@ const userSchema = new mongoose.Schema({
     lastLogin: {
         type: Date,
         default: Date.now
+    },
+    // Invitation fields
+    invitationToken: {
+        type: String,
+        default: undefined
+    },
+    tempPassword: {
+        type: String,
+        default: undefined
+    },
+    isInvited: {
+        type: Boolean,
+        default: false
+    },
+    invitedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: undefined
+    },
+    invitationCompletedAt: {
+        type: Date,
+        default: undefined
     }
 }, {
     timestamps: true
@@ -116,6 +138,8 @@ userSchema.set('toJSON', {
         delete ret.otpAttempts;
         delete ret.pendingLoginSession;
         delete ret.pendingLoginExpires;
+        delete ret.invitationToken;
+        delete ret.tempPassword;
         return ret;
     }
 });

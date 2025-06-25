@@ -8,6 +8,7 @@ require('dotenv').config();
 // Import controllers and middleware
 const fileController = require('./src/controllers/file-manage-controller');
 const authController = require('./src/controllers/auth-controller');
+const invitationController = require('./src/controllers/invitation-controller');
 const paypalController = require('./src/controllers/paypal-integration');
 const { authenticateToken } = require('./src/middleware/auth');
 
@@ -89,8 +90,13 @@ app.post('/api/auth/login', authController.login);
 app.post('/api/auth/verify-otp', authController.verifyOTP);
 app.post('/api/auth/resend-otp', authController.resendOTP);
 app.post('/api/auth/forgot-password', authController.forgotPassword);
-app.get('/api/auth/validate-reset-token/:token', authController.validateResetToken);
 app.post('/api/auth/reset-password/:token', authController.resetPassword);
+
+// Invitation Routes
+app.post('/api/invitations/send', authenticateToken, invitationController.sendInvitation);
+app.post('/api/invitations/validate', invitationController.validateInvitation);
+app.get('/api/invitations/my-invitations', authenticateToken, invitationController.getMyInvitations);
+app.post('/api/invitations/complete', invitationController.completeInvitation);
 
 // Protected Routes (require authentication)
 app.get('/api/auth/profile', authenticateToken, authController.getProfile);

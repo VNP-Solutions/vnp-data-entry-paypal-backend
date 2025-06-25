@@ -772,48 +772,312 @@ const resendOTP = async (req, res) => {
     }
 };
 
-// Validate reset token (useful for frontend to check token before showing reset form)
-const validateResetToken = async (req, res) => {
+// Send invitation
+const sendInvitation = async (req, res) => {
     try {
-        const { token } = req.params;
+        const { email, name } = req.body;
+        const inviterUserId = req.user.userId; // From auth middleware
 
-        if (!token) {
+        // Validate input
+        if (!email || !name) {
             return res.status(400).json({
                 status: 'error',
-                message: 'Reset token is required'
+                message: 'Email and name are required'
             });
         }
 
-        // Find user by reset token
-        const user = await User.findOne({
-            resetPasswordToken: token,
-            resetPasswordExpires: { $gt: Date.now() }
+        // Validate email format
+        const emailRegex = /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Please provide a valid email address'
+            });
+        }
+
+        // Get inviter information
+        const inviter = await User.findById(inviterUserId);
+        if (!inviter) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'Inviter not found'
+            });
+        }
+
+        // Check if user already exists with this email
+        const existingUser = await User.findOne({ email });
+        
+        if (existingUser) {
+            // If it's an active user (completed invitation/registration), don't allow new invitation
+            if (existingUser.isActive && !existingUser.isInvited) {
+                return res.status(400).json({
+                    status: 'error',
+                    message: 'A user with this email already exists and is active'
+                });
+            }
+            
+            // If it's a pending invitation, replace it automatically
+            if (existingUser.isInvited) {
+                console.log(`🔄 Replacing existing invitation for ${email}`);
+                await User.findByIdAndDelete(existingUser._id);
+                // Continue with creating new invitation
+            }
+        }
+
+        // Generate invitation token and temporary password
+        const invitationToken = generateInvitationToken();
+        const tempPassword = generateTempPassword();
+
+        // Create invited user with temporary credentials
+        const invitedUser = new User({
+            name,
+            email,
+            password: tempPassword, // This will be hashed by the pre-save middleware
+            invitationToken,
+            tempPassword: tempPassword, // Store plain text temp password for validation
+            isInvited: true,
+            invitedBy: inviterUserId,
+            isActive: false // Account will be activated after completing invitation
         });
 
-        if (!user) {
-            return res.status(400).json({
+        await invitedUser.save();
+
+        // Create invitation URL
+        const frontendUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+        const invitationUrl = `${frontendUrl}/invitation?token=${invitationToken}&email=${encodeURIComponent(email)}`;
+
+        // Send invitation email
+        try {
+            await sendInvitationEmail(email, name, invitationUrl, tempPassword, inviter.name);
+        } catch (emailError) {
+            console.error('Failed to send invitation email:', emailError);
+            
+            // Delete the created user if email fails
+            await User.findByIdAndDelete(invitedUser._id);
+            
+            return res.status(500).json({
                 status: 'error',
-                message: 'Invalid or expired reset token',
-                valid: false
+                message: 'Failed to send invitation email. Please try again.'
             });
         }
-
-        // Calculate time remaining
-        const timeRemaining = Math.floor((user.resetPasswordExpires - Date.now()) / 1000 / 60); // minutes
 
         res.status(200).json({
             status: 'success',
-            message: 'Reset token is valid',
+            message: 'Invitation sent successfully',
             data: {
-                valid: true,
-                email: user.email.replace(/(.{2})(.*)(@.*)/, '$1***$3'), // Partially hide email for security
-                timeRemaining: `${timeRemaining} minutes`,
-                expiresAt: new Date(user.resetPasswordExpires).toISOString()
+                invitedUser: {
+                    id: invitedUser._id,
+                    name: invitedUser.name,
+                    email: invitedUser.email,
+                    invitedBy: inviter.name
+                },
+                status: 'pending',
+                message: `Invitation has been sent to ${email}`
             }
         });
 
     } catch (error) {
-        console.error('Validate reset token error:', error);
+        console.error('Send invitation error:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+};
+
+// Validate invitation with temporary password
+const validateInvitation = async (req, res) => {
+    try {
+        const { email, tempPassword, token } = req.body;
+
+        // Validate input
+        if (!email || !tempPassword || !token) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Email, temporary password, and token are required'
+            });
+        }
+
+        // Find user by email and invitation token
+        const user = await User.findOne({
+            email: email.toLowerCase(),
+            invitationToken: token,
+            isInvited: true
+        });
+
+        if (!user) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'Invalid invitation'
+            });
+        }
+
+        // Verify temporary password
+        if (user.tempPassword !== tempPassword) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'Invalid temporary password'
+            });
+        }
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Invitation validated successfully',
+            data: {
+                valid: true,
+                user: {
+                    id: user._id,
+                    name: user.name,
+                    email: user.email
+                },
+                nextStep: 'Please set your new password to complete the registration'
+            }
+        });
+
+    } catch (error) {
+        console.error('Validate invitation error:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+};
+
+// Complete invitation by setting new password
+const completeInvitation = async (req, res) => {
+    try {
+        const { email, tempPassword, token, newPassword, confirmPassword } = req.body;
+
+        // Validate input
+        if (!email || !tempPassword || !token || !newPassword || !confirmPassword) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'All fields are required'
+            });
+        }
+
+        if (newPassword !== confirmPassword) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Passwords do not match'
+            });
+        }
+
+        // Validate password strength
+        if (newPassword.length < 8) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Password must be at least 8 characters long'
+            });
+        }
+
+        // Check for password complexity
+        const hasUpperCase = /[A-Z]/.test(newPassword);
+        const hasLowerCase = /[a-z]/.test(newPassword);
+        const hasNumbers = /\d/.test(newPassword);
+
+        if (!hasUpperCase || !hasLowerCase || !hasNumbers) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Password must contain at least one uppercase letter, one lowercase letter, and one number'
+            });
+        }
+
+        // Find user by email and invitation token
+        const user = await User.findOne({
+            email: email.toLowerCase(),
+            invitationToken: token,
+            isInvited: true
+        });
+
+        if (!user) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'Invalid invitation'
+            });
+        }
+
+        // Verify temporary password
+        if (user.tempPassword !== tempPassword) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'Invalid temporary password'
+            });
+        }
+
+        // Check if new password is same as temporary password
+        const isSameTempPassword = await bcrypt.compare(newPassword, user.password);
+        if (isSameTempPassword) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'New password must be different from the temporary password'
+            });
+        }
+
+        // Update user with new password and complete invitation
+        user.password = newPassword; // Will be hashed by pre-save middleware
+        user.invitationToken = undefined;
+        user.tempPassword = undefined;
+        user.isInvited = false;
+        user.isActive = true;
+        user.invitationCompletedAt = new Date();
+        user.lastLogin = new Date();
+
+        await user.save();
+
+        // Generate JWT token
+        const jwtToken = jwt.sign(
+            { userId: user._id, email: user.email },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        // Send welcome email (optional)
+        try {
+            const welcomeMailOptions = {
+                from: process.env.EMAIL_USER || 'your-email@gmail.com',
+                to: user.email,
+                subject: 'Welcome! Your account is now active',
+                html: `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <h2 style="color: #28a745; text-align: center;">🎉 Welcome to Our Platform!</h2>
+                        <p>Hello ${user.name},</p>
+                        <p>Congratulations! You have successfully completed your account setup. Your account is now active and ready to use.</p>
+                        <div style="text-align: center; margin: 30px 0;">
+                            <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard" style="background-color: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">Go to Dashboard</a>
+                        </div>
+                        <p>If you have any questions, feel free to reach out to our support team.</p>
+                        <p style="color: #666; font-size: 12px; text-align: center;">This is an automated message, please do not reply.</p>
+                    </div>
+                `
+            };
+            
+            await transporter.sendMail(welcomeMailOptions);
+        } catch (emailError) {
+            console.error('Failed to send welcome email:', emailError);
+            // Don't fail the request if welcome email fails
+        }
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Invitation completed successfully! Welcome aboard!',
+            data: {
+                user: {
+                    id: user._id,
+                    name: user.name,
+                    email: user.email,
+                    lastLogin: user.lastLogin,
+                    completedAt: user.invitationCompletedAt
+                },
+                token: jwtToken,
+                tokenExpiresIn: '24h'
+            }
+        });
+
+    } catch (error) {
+        console.error('Complete invitation error:', error);
         res.status(500).json({
             status: 'error',
             message: 'Internal server error',
@@ -831,5 +1095,6 @@ module.exports = {
     updateProfile,
     verifyOTP,
     resendOTP,
-    validateResetToken
+    validateInvitation,
+    completeInvitation
 }; 
