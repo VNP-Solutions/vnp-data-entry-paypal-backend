@@ -269,6 +269,11 @@ const validateInvitation = async (req, res) => {
 const getMyInvitations = async (req, res) => {
     try {
         const inviterUserId = req.user.userId; // From auth middleware
+        
+        // Get pagination parameters
+        const page = req.query.page || 1;
+        const limit = req.query.limit || 10;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
 
         // Get inviter information
         const inviter = await User.findById(inviterUserId);
@@ -279,10 +284,19 @@ const getMyInvitations = async (req, res) => {
             });
         }
 
-        // Find all users invited by this user
+        // Get total count for pagination
+        const total = await User.countDocuments({
+            invitedBy: inviterUserId
+        });
+
+        // Find users invited by this user with pagination
         const invitedUsers = await User.find({
             invitedBy: inviterUserId
-        }).select('name email isInvited isActive createdAt invitationCompletedAt lastLogin');
+        })
+        .select('name email isInvited isActive createdAt invitationCompletedAt lastLogin')
+        .sort({ createdAt: -1 }) // Sort by invitation date (newest first)
+        .skip(skip)
+        .limit(parseInt(limit));
 
         // Format the response data
         const formattedInvitations = invitedUsers.map(user => {
@@ -314,15 +328,16 @@ const getMyInvitations = async (req, res) => {
             };
         });
 
-        // Sort by invitation date (newest first)
-        formattedInvitations.sort((a, b) => new Date(b.invitedAt) - new Date(a.invitedAt));
+        // Calculate statistics (for all invitations, not just current page)
+        const allInvitedUsers = await User.find({
+            invitedBy: inviterUserId
+        }).select('isInvited isActive invitationCompletedAt');
 
-        // Calculate statistics
         const stats = {
-            total: formattedInvitations.length,
-            pending: formattedInvitations.filter(inv => inv.status === 'pending').length,
-            completed: formattedInvitations.filter(inv => inv.status === 'completed').length,
-            active: formattedInvitations.filter(inv => inv.status === 'active').length
+            total: total,
+            pending: allInvitedUsers.filter(user => user.isInvited).length,
+            completed: allInvitedUsers.filter(user => user.isActive && user.invitationCompletedAt).length,
+            active: allInvitedUsers.filter(user => user.isActive && !user.invitationCompletedAt).length
         };
 
         res.status(200).json({
@@ -335,7 +350,13 @@ const getMyInvitations = async (req, res) => {
                     email: inviter.email
                 },
                 statistics: stats,
-                invitations: formattedInvitations
+                invitations: formattedInvitations,
+                pagination: {
+                    total,
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    pages: Math.ceil(total / parseInt(limit))
+                }
             }
         });
 

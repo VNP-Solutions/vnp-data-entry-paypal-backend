@@ -710,7 +710,7 @@ const getUserUploadSessions = async (req, res) => {
                             Math.round((session.processedRows / session.totalRows) * 100) : 0),
                     startedAt: session.startedAt,
                     completedAt: session.completedAt,
-                    vnpWorkId: session.vnpWorkId
+                    
                 })),
                 pagination: {
                     total,
