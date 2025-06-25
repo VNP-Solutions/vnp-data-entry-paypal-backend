@@ -86,12 +86,18 @@ const uploadFile = async (req, res) => {
             });
         }
 
-        const fileName = req.file.originalname;
+        const originalFileName = req.file.originalname;
         const userId = req.user.userId;
         const vnpWorkId = req.body.vnpWorkId;
 
-        // Check for existing upload session
-        const existingCheck = await checkExistingUpload(fileName, userId);
+        // Add timestamp to filename
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5); // Format: YYYY-MM-DDTHH-MM-SS
+        const fileExtension = originalFileName.substring(originalFileName.lastIndexOf('.'));
+        const fileNameWithoutExt = originalFileName.substring(0, originalFileName.lastIndexOf('.'));
+        const fileName = `${fileNameWithoutExt}_${timestamp}${fileExtension}`;
+
+        // Check for existing upload session (using original filename to avoid conflicts)
+        const existingCheck = await checkExistingUpload(originalFileName, userId);
         if (existingCheck.exists) {
             return res.status(409).json({
                 status: 'error',
@@ -145,7 +151,7 @@ const uploadFile = async (req, res) => {
             uploadId: uploadId,
             userId: userId,
             fileName: fileName,
-            originalFileName: fileName,
+            originalFileName: originalFileName,
             s3Key: req.file.key,
             totalRows: totalRows - 1,
             status: 'processing',
