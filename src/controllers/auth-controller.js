@@ -314,7 +314,7 @@ const forgotPassword = async (req, res) => {
         await user.save();
 
         // Create reset URL (use environment variable for frontend URL)
-        const frontendUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+        const frontendUrl = process.env.FRONTEND_URL;
         const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
         
         // Send password reset email
@@ -843,7 +843,7 @@ const sendInvitation = async (req, res) => {
         await invitedUser.save();
 
         // Create invitation URL
-        const frontendUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+        const frontendUrl = process.env.FRONTEND_URL;
         const invitationUrl = `${frontendUrl}/invitation?token=${invitationToken}&email=${encodeURIComponent(email)}`;
 
         // Send invitation email
