@@ -320,9 +320,10 @@ const getRowData = async (req, res) => {
         // Build query object
         const query = { userId: userId };
 
-        // Add filter for Charge status if provided
-        if (chargeStatus && chargeStatus.trim() !== '') {
-            query['Charge status'] = { $regex: chargeStatus, $options: 'i' }; // Case-insensitive match
+
+        // Add filter for Charge status if provided (skip if "All" is selected)
+        if (chargeStatus && chargeStatus.trim() !== '' && chargeStatus !== "All") {
+            query['Charge status'] = { $regex: chargeStatus, $options: 'i' }; 
         }
 
         // Add search functionality across multiple fields if provided
