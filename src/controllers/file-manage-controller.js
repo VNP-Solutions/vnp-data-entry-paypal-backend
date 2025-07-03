@@ -323,7 +323,7 @@ const getRowData = async (req, res) => {
 
         // Add filter for Charge status if provided (skip if "All" is selected)
         if (chargeStatus && chargeStatus.trim() !== '' && chargeStatus !== "All") {
-            query['Charge status'] = { $regex: chargeStatus, $options: 'i' }; 
+            query['Charge status'] = chargeStatus; 
         }
 
         // Add search functionality across multiple fields if provided
