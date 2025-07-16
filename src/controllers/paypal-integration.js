@@ -20,7 +20,7 @@ const client = new Client({
         oAuthClientSecret: PAYPAL_CLIENT_SECRET,
     },
     timeout: 0,
-    environment: Environment.Production, // Change to Environment.Live for production
+    environment: Environment.Sandbox, // Change to Environment.Production for production
     logging: {
         logLevel: LogLevel.Info,
         logRequest: { logBody: true },
@@ -128,7 +128,27 @@ const processDirectPayment = async (paymentData) => {
         if (error instanceof ApiError) {
             console.error('PayPal API Error:', error.message);
             console.error('PayPal Error Details:', error.result);
-            throw new Error(`PayPal Error: ${error.message}`);
+            
+            // Extract field and description from error details
+            let errorMessage = 'PayPal Payment Error';
+            
+            if (error.result && error.result.details && Array.isArray(error.result.details)) {
+                const errorDetails = error.result.details.map(detail => ({
+                    field: detail.field || 'Unknown field',
+                    description: detail.description || 'Unknown error'
+                }));
+                
+                // Format error message with field and description
+                const formattedErrors = errorDetails.map(detail => 
+                    `${detail.field}: ${detail.description}`
+                ).join('; ');
+                
+                errorMessage = `PayPal Error - ${formattedErrors}`;
+            } else {
+                errorMessage = `PayPal Error: ${error.message}`;
+            }
+            
+            throw new Error(errorMessage);
         }
         console.error('General Error:', error);
         throw error;
