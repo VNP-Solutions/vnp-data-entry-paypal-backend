@@ -124,7 +124,6 @@ async function sendOTPEmail(email, otp, userName) {
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;
-        console.log(email, password);
 
         // Validate input
         if (!email || !password) {
@@ -136,7 +135,6 @@ const login = async (req, res) => {
 
         // Find user by email
         const user = await User.findOne({ email });
-        console.log("first",user);
         if (!user) {
             return res.status(401).json({
                 status: 'error',
@@ -154,7 +152,6 @@ const login = async (req, res) => {
                 message: 'Invalid email or password'
             });
         }
-        console.log(isPasswordValid);
 
         // Generate OTP and session token
         const otp = generateOTP();

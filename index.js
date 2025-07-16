@@ -52,14 +52,6 @@ const requestLogger = (req, res, next) => {
         // Method color
         const methodColor = '\x1b[36m'; // Cyan for method
         
-        // Log the request
-        console.log(
-            `[${timestamp}] ` +
-            `${methodColor}${req.method}${resetColor} ` +
-            `${req.originalUrl} ` +
-            `${statusColor}${res.statusCode}${resetColor} ` +
-            `- ${duration}ms`
-        );
         
         // Call original end method
         originalEnd.apply(this, args);
@@ -119,6 +111,9 @@ app.delete('/api/upload/cleanup', authenticateToken, fileController.cleanupFaile
 
 // PayPal Payment API Routes (protected)
 app.post('/api/paypal/process-payment', authenticateToken, paypalController.processPayment);
+
+// Admin API Routes (protected)
+app.get('/api/admin/excel-data', authenticateToken, paypalController.getAdminExcelData);
 
 // Health check route
 app.get('/api/health', (req, res) => {

@@ -138,7 +138,6 @@ const sendInvitation = async (req, res) => {
             
             // If it's a pending invitation, replace it automatically
             if (existingUser.isInvited) {
-                console.log(`🔄 Replacing existing invitation for ${email}`);
                 await User.findByIdAndDelete(existingUser._id);
                 // Continue with creating new invitation
             }

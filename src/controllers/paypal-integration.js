@@ -303,6 +303,155 @@ const processPayment = async (req, res) => {
     }
 };
 
+/**
+ * Get all ExcelData records for admin access (excluding "Ready to charge" status)
+ * Only accessible by authorized admin emails from environment variables
+ * Supports pagination, sorting, search, and filtering
+ * GET /api/admin/excel-data?page=1&limit=10&sort=createdAt&order=desc&search=hotel&status=Charged
+ */
+const getAdminExcelData = async (req, res) => {
+    try {
+        // Get authorized admin emails from environment variables
+        const adminEmails = process.env.ADMIN_EMAILS ? 
+            process.env.ADMIN_EMAILS.split(',').map(email => email.trim().toLowerCase()) : [];
+        
+        // Check if current user email is in authorized list
+        const userEmail = req.user.email.toLowerCase();
+        
+        if (!adminEmails.includes(userEmail)) {
+            return res.status(403).json({
+                status: 'error',
+                message: 'You are not authorized'
+            });
+        }
+        
+        // Extract query parameters
+        const {
+            page = 1,
+            limit = 10,
+            sort = 'createdAt',
+            order = 'desc',
+            search = '',
+            status = '',
+            portfolio = '',
+            batch = '',
+            hotel = '',
+        } = req.query;
+
+        // Validate pagination parameters
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit))); // Max 100 records per page
+        const skip = (pageNum - 1) * limitNum;
+
+        // Build base query (always exclude "Ready to charge")
+        let query = {
+            'Charge status': { $ne: 'Ready to charge' }
+        };
+
+        // Add search functionality
+        if (search) {
+            const searchRegex = new RegExp(search, 'i'); // Case-insensitive search
+            query.$or = [
+                { 'Hotel Name': searchRegex },
+                { 'Name': searchRegex },
+                { 'Reservation ID': searchRegex },
+                { 'Hotel Confirmation Code': searchRegex },
+                { 'Expedia ID': searchRegex },
+                { 'VNP Work ID': searchRegex },
+                { 'Batch': searchRegex },
+                { 'Portfolio': searchRegex }
+            ];
+        }
+
+        // Add filters
+        if (status) {
+            query['Charge status'] = status;
+        }
+        
+        if (portfolio) {
+            query['Portfolio'] = new RegExp(portfolio, 'i');
+        }
+        
+        if (batch) {
+            query['Batch'] = new RegExp(batch, 'i');
+        }
+        
+        if (hotel) {
+            query['Hotel Name'] = new RegExp(hotel, 'i');
+        }
+
+        // Build sort object
+        const sortOrder = order.toLowerCase() === 'desc' ? -1 : 1;
+        const sortObj = {};
+        sortObj[sort] = sortOrder;
+
+        // Execute query with pagination
+        const [excelData, totalCount] = await Promise.all([
+            ExcelData.find(query)
+                .sort(sortObj)
+                .skip(skip)
+                .limit(limitNum)
+                .lean(), // Use lean() for better performance
+            ExcelData.countDocuments(query)
+        ]);
+
+        // Calculate pagination info
+        const totalPages = Math.ceil(totalCount / limitNum);
+        const hasNextPage = pageNum < totalPages;
+        const hasPrevPage = pageNum > 1;
+
+        // Get unique values for filters (helpful for frontend dropdowns)
+        const [statusList, portfolioList, batchList] = await Promise.all([
+            ExcelData.distinct('Charge status', { 'Charge status': { $ne: 'Ready to charge' } }),
+            ExcelData.distinct('Portfolio', { 'Portfolio': { $ne: null, $ne: '' } }),
+            ExcelData.distinct('Batch', { 'Batch': { $ne: null, $ne: '' } })
+        ]);
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Admin ExcelData retrieved successfully',
+            data: {
+                data: excelData,
+                pagination: {
+                    currentPage: pageNum,
+                    totalPages,
+                    totalCount: totalCount,
+                    limit: limitNum,
+                    hasNextPage,
+                    hasPrevPage,
+                },
+                filters: {
+                    applied: {
+                        search,
+                        status,
+                        portfolio,
+                        batch,
+                        hotel,
+                        sort,
+                        order
+                    },
+                    available: {
+                        statusOptions: statusList.filter(s => s), // Remove null/empty
+                        portfolioOptions: portfolioList.filter(p => p),
+                        batchOptions: batchList.filter(b => b)
+                    }
+                },
+                requestedBy: req.user.email,
+                timestamp: new Date().toISOString()
+            }
+        });
+
+    } catch (error) {
+        console.error('Get admin ExcelData error:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
-    processPayment
+    processPayment,
+    getAdminExcelData
 };
