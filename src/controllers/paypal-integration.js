@@ -6,7 +6,7 @@ const {
     OrdersController,
 } = require("@paypal/paypal-server-sdk");
 const ExcelData = require('../models/ExcelData');
-const { encryptCardData } = require('../utils/encryption');
+const { encryptCardData, decryptCardData } = require('../utils/encryption');
 
 const {
     PAYPAL_CLIENT_ID,
@@ -323,12 +323,6 @@ const processPayment = async (req, res) => {
     }
 };
 
-/**
- * Get all ExcelData records for admin access (excluding "Ready to charge" status)
- * Only accessible by authorized admin emails from environment variables
- * Supports pagination, sorting, search, and filtering
- * GET /api/admin/excel-data?page=1&limit=10&sort=createdAt&order=desc&search=hotel&status=Charged
- */
 const getAdminExcelData = async (req, res) => {
     try {
         // Get authorized admin emails from environment variables
@@ -363,9 +357,9 @@ const getAdminExcelData = async (req, res) => {
         const limitNum = Math.min(100, Math.max(1, parseInt(limit))); // Max 100 records per page
         const skip = (pageNum - 1) * limitNum;
 
-        // Build base query (always exclude "Ready to charge")
+        // Build base query (always exclude "Ready to charge" and "Partially charged")
         let query = {
-            'Charge status': { $ne: 'Ready to charge' }
+            'Charge status': { $nin: ['Ready to charge', 'Partially charged'] }
         };
 
         // Add search functionality
@@ -422,16 +416,21 @@ const getAdminExcelData = async (req, res) => {
 
         // Get unique values for filters (helpful for frontend dropdowns)
         const [statusList, portfolioList, batchList] = await Promise.all([
-            ExcelData.distinct('Charge status', { 'Charge status': { $ne: 'Ready to charge' } }),
+            ExcelData.distinct('Charge status', { 'Charge status': { $nin: ['Ready to charge', 'Partially charged'] } }),
             ExcelData.distinct('Portfolio', { 'Portfolio': { $ne: null, $ne: '' } }),
             ExcelData.distinct('Batch', { 'Batch': { $ne: null, $ne: '' } })
         ]);
+
+        // Decrypt sensitive card data before returning
+        const decryptedExcelData = excelData.map(record => {
+            return decryptCardData(record);
+        });
 
         res.status(200).json({
             status: 'success',
             message: 'Admin ExcelData retrieved successfully',
             data: {
-                data: excelData,
+                data: decryptedExcelData,
                 pagination: {
                     currentPage: pageNum,
                     totalPages,
