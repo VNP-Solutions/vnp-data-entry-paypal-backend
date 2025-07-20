@@ -326,21 +326,23 @@ const listAccounts = async (req, res) => {
         res.status(200).json({
             status: 'success',
             message: 'Stripe accounts retrieved successfully',
-            data: transformedAccounts,
-            pagination: {
-                current_page: currentPage,
-                limit: numericLimit,
-                has_more: filteredAccounts.has_more,
-                total_count: filteredAccounts.data.length,
-                total_filtered_count: totalFilteredCount,
-                total_pages: totalPages,
-                next_page: filteredAccounts.has_more ? currentPage + 1 : null,
-                previous_page: currentPage > 1 ? currentPage - 1 : null,
-                last_id: filteredAccounts.data.length > 0 ? filteredAccounts.data[filteredAccounts.data.length - 1].id : null
-            },
-            filters: {
-                applied: {
-                    search: search || null
+            data: {
+                ...transformedAccounts,
+                pagination: {
+                    current_page: currentPage,
+                    limit: numericLimit,
+                    has_more: filteredAccounts.has_more,
+                    total_count: filteredAccounts.data.length,
+                    total_filtered_count: totalFilteredCount,
+                    total_pages: totalPages,
+                    next_page: filteredAccounts.has_more ? currentPage + 1 : null,
+                    previous_page: currentPage > 1 ? currentPage - 1 : null,
+                    last_id: filteredAccounts.data.length > 0 ? filteredAccounts.data[filteredAccounts.data.length - 1].id : null
+                },
+                filters: {
+                    applied: {
+                        search: search || null
+                    }
                 }
             }
         });
