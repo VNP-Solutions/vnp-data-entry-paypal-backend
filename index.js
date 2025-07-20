@@ -10,6 +10,7 @@ const fileController = require('./src/controllers/file-manage-controller');
 const authController = require('./src/controllers/auth-controller');
 const invitationController = require('./src/controllers/invitation-controller');
 const paypalController = require('./src/controllers/paypal-integration');
+const stripeController = require('./src/controllers/stripe-controller');
 const { authenticateToken } = require('./src/middleware/auth');
 
 // Import database connection
@@ -111,6 +112,12 @@ app.delete('/api/upload/cleanup', authenticateToken, fileController.cleanupFaile
 
 // PayPal Payment API Routes (protected)
 app.post('/api/paypal/process-payment', authenticateToken, paypalController.processPayment);
+
+// Stripe Connect API Routes (protected)
+app.post('/api/stripe/create-account', authenticateToken, stripeController.createAccount);
+app.get('/api/stripe/accounts', authenticateToken, stripeController.listAccounts);
+app.get('/api/stripe/account/:accountId', authenticateToken, stripeController.getAccountById);
+app.delete('/api/stripe/account/:accountId', authenticateToken, stripeController.deleteAccount);
 
 // Admin API Routes (protected)
 app.get('/api/admin/excel-data', authenticateToken, paypalController.getAdminExcelData);
