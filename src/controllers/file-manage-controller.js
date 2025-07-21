@@ -193,6 +193,49 @@ const uploadFile = async (req, res) => {
                 }, {});
 
                 if (Object.keys(rowObject).length > 0 && rowObject['Expedia ID']) {
+                    // Normalize Card Expire to YYYY-MM format
+                    let cardExpire = rowObject['Card Expire'];
+                    if (cardExpire) {
+                        // If it's a number (Excel date serial), convert to YYYY-MM
+                        if (!isNaN(cardExpire) && cardExpire !== '' && cardExpire !== null) {
+                            // Excel's epoch starts at 1899-12-30
+                            const serial = Number(cardExpire);
+                            if (serial > 59) { // Excel bug: 1900 is not a leap year
+                                // Excel incorrectly treats 1900 as a leap year
+                                // So, dates after 1900-02-28 are offset by +1
+                                // But for just YYYY-MM, this is fine
+                            }
+                            const excelEpoch = new Date(1899, 11, 30);
+                            const date = new Date(excelEpoch.getTime() + serial * 24 * 60 * 60 * 1000);
+                            const year = date.getFullYear();
+                            const month = (date.getMonth() + 1).toString().padStart(2, '0');
+                            cardExpire = `${year}-${month}`;
+                        } else {
+                            // Try to parse as date string (YYYY-MM, MM/YYYY, MM-YYYY, etc.)
+                            let match = null;
+                            // YYYY-MM
+                            if (/^\d{4}-\d{2}$/.test(cardExpire)) {
+                                // already correct
+                            } else if ((match = cardExpire.match(/^(\d{2})[\/-](\d{4})$/))) {
+                                // MM-YYYY or MM/YYYY
+                                cardExpire = `${match[2]}-${match[1]}`;
+                            } else if ((match = cardExpire.match(/^(\d{4})[\/-](\d{2})$/))) {
+                                // YYYY/MM or YYYY-MM
+                                cardExpire = `${match[1]}-${match[2]}`;
+                            } else if ((match = cardExpire.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/))) {
+                                // DD-MM-YYYY or DD/MM/YYYY
+                                cardExpire = `${match[3]}-${match[2]}`;
+                            } else {
+                                // fallback: try Date.parse
+                                const d = new Date(cardExpire);
+                                if (!isNaN(d)) {
+                                    const year = d.getFullYear();
+                                    const month = (d.getMonth() + 1).toString().padStart(2, '0');
+                                    cardExpire = `${year}-${month}`;
+                                }
+                            }
+                        }
+                    }
                     const mappedData = {
                         userId: userId,
                         uploadId: uploadId,
@@ -213,7 +256,7 @@ const uploadFile = async (req, res) => {
                         'Amount to charge': rowObject['Amount to charge'],
                         'Charge status': rowObject['Charge status'],
                         'Card Number': rowObject['Card Number'],
-                        'Card Expire': rowObject['Card Expire'],
+                        'Card Expire': cardExpire,
                         'Card CVV': rowObject['Card CVV'],
                         'Soft Descriptor': rowObject['Soft Descriptor'] || rowObject['BT MAID'],
                         'VNP Work ID': rowObject['VNP Work ID'],
@@ -835,6 +878,49 @@ const resumeUpload = async (req, res) => {
                 }, {});
 
                 if (Object.keys(rowObject).length > 0 && rowObject['Expedia ID']) {
+                    // Normalize Card Expire to YYYY-MM format
+                    let cardExpire = rowObject['Card Expire'];
+                    if (cardExpire) {
+                        // If it's a number (Excel date serial), convert to YYYY-MM
+                        if (!isNaN(cardExpire) && cardExpire !== '' && cardExpire !== null) {
+                            // Excel's epoch starts at 1899-12-30
+                            const serial = Number(cardExpire);
+                            if (serial > 59) { // Excel bug: 1900 is not a leap year
+                                // Excel incorrectly treats 1900 as a leap year
+                                // So, dates after 1900-02-28 are offset by +1
+                                // But for just YYYY-MM, this is fine
+                            }
+                            const excelEpoch = new Date(1899, 11, 30);
+                            const date = new Date(excelEpoch.getTime() + serial * 24 * 60 * 60 * 1000);
+                            const year = date.getFullYear();
+                            const month = (date.getMonth() + 1).toString().padStart(2, '0');
+                            cardExpire = `${year}-${month}`;
+                        } else {
+                            // Try to parse as date string (YYYY-MM, MM/YYYY, MM-YYYY, etc.)
+                            let match = null;
+                            // YYYY-MM
+                            if (/^\d{4}-\d{2}$/.test(cardExpire)) {
+                                // already correct
+                            } else if ((match = cardExpire.match(/^(\d{2})[\/-](\d{4})$/))) {
+                                // MM-YYYY or MM/YYYY
+                                cardExpire = `${match[2]}-${match[1]}`;
+                            } else if ((match = cardExpire.match(/^(\d{4})[\/-](\d{2})$/))) {
+                                // YYYY/MM or YYYY-MM
+                                cardExpire = `${match[1]}-${match[2]}`;
+                            } else if ((match = cardExpire.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/))) {
+                                // DD-MM-YYYY or DD/MM/YYYY
+                                cardExpire = `${match[3]}-${match[2]}`;
+                            } else {
+                                // fallback: try Date.parse
+                                const d = new Date(cardExpire);
+                                if (!isNaN(d)) {
+                                    const year = d.getFullYear();
+                                    const month = (d.getMonth() + 1).toString().padStart(2, '0');
+                                    cardExpire = `${year}-${month}`;
+                                }
+                            }
+                        }
+                    }
                     const mappedData = {
                         userId: userId,
                         uploadId: uploadId,
@@ -855,7 +941,7 @@ const resumeUpload = async (req, res) => {
                         'Amount to charge': rowObject['Amount to charge'],
                         'Charge status': rowObject['Charge status'],
                         'Card Number': rowObject['Card Number'],
-                        'Card Expire': rowObject['Card Expire'],
+                        'Card Expire': cardExpire,
                         'Card CVV': rowObject['Card CVV'],
                         'Soft Descriptor': rowObject['Soft Descriptor'] || rowObject['BT MAID'],
                         'VNP Work ID': rowObject['VNP Work ID'],
