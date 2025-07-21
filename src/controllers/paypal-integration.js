@@ -7,6 +7,7 @@ const {
 } = require("@paypal/paypal-server-sdk");
 const ExcelData = require('../models/ExcelData');
 const { encryptCardData, decryptCardData } = require('../utils/encryption');
+const pLimit = require('p-limit');
 
 const {
     PAYPAL_CLIENT_ID,
@@ -20,7 +21,7 @@ const client = new Client({
         oAuthClientSecret: PAYPAL_CLIENT_SECRET,
     },
     timeout: 0,
-    environment: Environment.Production, // Change to Environment.Production for production
+    environment: Environment.Sandbox, // Change to Environment.Production for production
     logging: {
         logLevel: LogLevel.Info,
         logRequest: { logBody: true },
@@ -47,6 +48,17 @@ const processDirectPayment = async (paymentData) => {
         cardholderName,
         billingAddress
     } = paymentData;
+
+    // Validation for required fields and format
+    if (!cardNumber) {
+        throw new Error('Card number is required');
+    }
+    if (!cardExpiry) {
+        throw new Error('Card expiry is required');
+    }
+    if (!cardCvv) {
+        throw new Error('Card CVV is required');
+    }
 
     // Parse card expiry (format: "2025-12" -> month: "12", year: "2025")
     const [year, month] = cardExpiry.split('-');
@@ -75,7 +87,7 @@ const processDirectPayment = async (paymentData) => {
                     value: amount.toString()
                 },
                 description: description,
-                customId: documentId,
+                customId: documentId ? documentId.toString() : undefined,
                 ...(descriptor && {
                     softDescriptor: descriptor
                 })
@@ -248,10 +260,9 @@ const processPayment = async (req, res) => {
         try {
             // Prepare card data for encryption
             const cardDataToEncrypt = {
-                'Card first 4': cleanCardNumber.substring(0, 4),
-                'Card last 12': cleanCardNumber.substring(cleanCardNumber.length - 4),
+                'Card Number': cleanCardNumber,
                 'Card Expire': cardExpiry,
-                'Card CVV': '***' // Don't store actual CVV
+                'Card CVV': cardCvv
             };
             
             // Encrypt sensitive card data
@@ -261,8 +272,7 @@ const processPayment = async (req, res) => {
                 documentId,
                 {
                     'Charge status': 'Charged',
-                    'Card first 4': encryptedCardData['Card first 4'],
-                    'Card last 12': encryptedCardData['Card last 12'],
+                    'Card Number': encryptedCardData['Card Number'],
                     'Card Expire': encryptedCardData['Card Expire'],
                     'Card CVV': encryptedCardData['Card CVV'],
                     'Soft Descriptor': descriptor,
@@ -320,6 +330,142 @@ const processPayment = async (req, res) => {
             message: 'Failed to process payment',
             error: error.message
         });
+    }
+};
+
+// Bulk PayPal payment controller (parallel, with address mapping and summary)
+const processBulkPayments = async (req, res) => {
+    console.log('Processing bulk payments');
+    console.log(req.body);
+    try {
+        const { documentIds } = req.body;
+        if (!Array.isArray(documentIds) || documentIds.length === 0) {
+            return res.status(400).json({ status: 'error', message: 'documentIds array is required' });
+        }
+        // Fetch all rows in one query
+        const rows = await ExcelData.find({ _id: { $in: documentIds } }).lean();
+        console.log("rows", rows);
+        const limit = pLimit(5); // Limit concurrency to 5
+        const results = await Promise.all(rows.map(row => limit(async () => {
+            try {
+                // Decrypt card data
+                const decrypted = decryptCardData(row);
+                console.log(decrypted);
+                // Debug log for decrypted card data
+                if (!decrypted['Card Number'] || !decrypted['Card Expire'] || !decrypted['Card CVV']) {
+                    console.error('Decryption failed for row:', row._id, {
+                        cardNumber: decrypted['Card Number'],
+                        cardExpiry: decrypted['Card Expire'],
+                        cardCvv: decrypted['Card CVV']
+                    });
+                    throw new Error('Decryption failed for one or more card fields');
+                }
+                // Map billing address fields if present
+                const billingAddress = {
+                    address_line_1: row['Billing Address Line 1'] || '',
+                    address_line_2: row['Billing Address Line 2'] || '',
+                    admin_area_2: row['City'] || '',
+                    admin_area_1: row['State'] || '',
+                    postal_code: row['Postal Code'] || '',
+                    country_code: row['Country Code'] || 'US'
+                };
+                const paymentData = {
+                    amount: row['Amount to charge'],
+                    currency: row['Curency'] || 'USD',
+                    description: 'Bulk payment',
+                    descriptor: row['Soft Descriptor'],
+                    documentId: row._id,
+                    cardNumber: decrypted['Card Number'],
+                    cardExpiry: decrypted['Card Expire'],
+                    cardCvv: decrypted['Card CVV'],
+                    cardholderName: row['Name'],
+                    billingAddress
+                };
+                // Call existing payment logic
+                const { jsonResponse, httpStatusCode } = await processDirectPayment(paymentData);
+                
+                // Prepare card data for encryption
+                const cardDataToEncrypt = {
+                    'Card Number': decrypted['Card Number'],
+                    'Card Expire': decrypted['Card Expire'],
+                    'Card CVV': decrypted['Card CVV']
+                };
+                const encryptedCardData = encryptCardData(cardDataToEncrypt);
+
+                // Extract payment details from PayPal response
+                const paymentDetails = {
+                    orderId: jsonResponse.id,
+                    captureId: jsonResponse.purchase_units[0]?.payments?.captures[0]?.id,
+                    networkTransactionId: jsonResponse.purchase_units[0]?.payments?.captures[0]?.network_transaction_reference?.id,
+                    status: jsonResponse.status,
+                    amount: jsonResponse.purchase_units[0]?.amount?.value,
+                    currency: jsonResponse.purchase_units[0]?.amount?.currency_code,
+                    paypalFee: jsonResponse.purchase_units[0]?.payments?.captures[0]?.seller_receivable_breakdown?.paypal_fee?.value,
+                    netAmount: jsonResponse.purchase_units[0]?.payments?.captures[0]?.seller_receivable_breakdown?.net_amount?.value,
+                    cardLastDigits: jsonResponse.payment_source?.card?.last_digits,
+                    cardBrand: jsonResponse.payment_source?.card?.brand,
+                    cardType: jsonResponse.payment_source?.card?.type,
+                    avsCode: jsonResponse.purchase_units[0]?.payments?.captures[0]?.processor_response?.avs_code,
+                    cvvCode: jsonResponse.purchase_units[0]?.payments?.captures[0]?.processor_response?.cvv_code,
+                    createTime: jsonResponse.create_time,
+                    updateTime: jsonResponse.update_time
+                };
+
+                // Update the ExcelData record
+                await ExcelData.findByIdAndUpdate(
+                    row._id,
+                    {
+                        'Charge status': 'Charged',
+                        'Card Number': encryptedCardData['Card Number'],
+                        'Card Expire': encryptedCardData['Card Expire'],
+                        'Card CVV': encryptedCardData['Card CVV'],
+                        'Soft Descriptor': row['Soft Descriptor'],
+                        'Status': 'Payment Processed',
+                        // Add payment details as additional fields
+                        paypalOrderId: paymentDetails.orderId,
+                        paypalCaptureId: paymentDetails.captureId,
+                        paypalNetworkTransactionId: paymentDetails.networkTransactionId,
+                        paypalFee: paymentDetails.paypalFee,
+                        paypalNetAmount: paymentDetails.netAmount,
+                        paypalCardBrand: paymentDetails.cardBrand,
+                        paypalCardType: paymentDetails.cardType,
+                        paypalAvsCode: paymentDetails.avsCode,
+                        paypalCvvCode: paymentDetails.cvvCode,
+                        paypalCreateTime: paymentDetails.createTime,
+                        paypalUpdateTime: paymentDetails.updateTime,
+                        paypalStatus: paymentDetails.status,
+                        paypalAmount: paymentDetails.amount,
+                        paypalCurrency: paymentDetails.currency,
+                        paypalCardLastDigits: paymentDetails.cardLastDigits
+                    },
+                    { new: true }
+                );
+
+                return {
+                    documentId: row._id,
+                    status: 'success',
+                    httpStatusCode,
+                    response: jsonResponse
+                };
+            } catch (err) {
+                return {
+                    documentId: row._id,
+                    status: 'error',
+                    error: err.message,
+                    stack: err.stack
+                };
+            }
+        })));
+        // Add summary stats
+        const summary = {
+            total: results.length,
+            success: results.filter(r => r.status === 'success').length,
+            error: results.filter(r => r.status === 'error').length
+        };
+        res.status(200).json({ status: 'success', summary, results });
+    } catch (error) {
+        console.error('Bulk PayPal payment error:', error);
+        res.status(500).json({ status: 'error', message: 'Bulk payment failed', error: error.message });
     }
 };
 
@@ -472,5 +618,6 @@ const getAdminExcelData = async (req, res) => {
 
 module.exports = {
     processPayment,
-    getAdminExcelData
+    getAdminExcelData,
+    processBulkPayments
 };

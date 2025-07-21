@@ -105,8 +105,7 @@ const encryptCardData = (data) => {
     
     // Encrypt sensitive card fields
     const cardFields = [
-        'Card first 4',
-        'Card last 12', 
+        'Card Number',
         'Card Expire',
         'Card CVV'
     ];
@@ -126,9 +125,8 @@ const decryptCardData = (data) => {
     
     // Decrypt sensitive card fields
     const cardFields = [
-        'Card first 4',
-        'Card last 12',
-        'Card Expire', 
+        'Card Number',
+        'Card Expire',
         'Card CVV'
     ];
     

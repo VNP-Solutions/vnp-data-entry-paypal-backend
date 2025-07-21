@@ -77,11 +77,7 @@ const excelDataSchema = new mongoose.Schema({
         type: String,
         default: null
     },
-    'Card first 4': {
-        type: String,
-        default: null
-    },
-    'Card last 12': {
+    'Card Number': {
         type: String,
         default: null
     },

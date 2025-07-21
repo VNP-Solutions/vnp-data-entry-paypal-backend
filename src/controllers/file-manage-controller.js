@@ -4,6 +4,8 @@ const ExcelData = require('../models/ExcelData');
 const UploadSession = require('../models/UploadSession');
 const { upload, s3Service } = require('../config/s3');
 const { encryptCardData, decryptCardData } = require('../utils/encryption');
+const User = require('../models/User');
+const ExcelJS = require('exceljs');
 
 // Helper function to advance a column name
 function nextCol(col) {
@@ -210,8 +212,7 @@ const uploadFile = async (req, res) => {
                         'Curency': rowObject['Curency'],
                         'Amount to charge': rowObject['Amount to charge'],
                         'Charge status': rowObject['Charge status'],
-                        'Card first 4': rowObject['Card first 4'],
-                        'Card last 12': rowObject['Card last 12'],
+                        'Card Number': rowObject['Card Number'],
                         'Card Expire': rowObject['Card Expire'],
                         'Card CVV': rowObject['Card CVV'],
                         'Soft Descriptor': rowObject['Soft Descriptor'] || rowObject['BT MAID'],
@@ -458,8 +459,7 @@ const updateSheet = async (req, res) => {
             'Curency': updateData['Curency'],
             'Amount to charge': updateData['Amount to charge'],
             'Charge status': updateData['Charge status'],
-            'Card first 4': updateData['Card first 4'],
-            'Card last 12': updateData['Card last 12'],
+            'Card Number': updateData['Card Number'],
             'Card Expire': updateData['Card Expire'],
             'Card CVV': updateData['Card CVV'],
             'Soft Descriptor': updateData['Soft Descriptor'],
@@ -703,10 +703,17 @@ const getUserUploadSessions = async (req, res) => {
 
         const total = await UploadSession.countDocuments(query);
 
+        // Add chargedCount for each session
+        const chargedCounts = await Promise.all(
+            sessions.map(session =>
+                ExcelData.countDocuments({ uploadId: session.uploadId, 'Charge status': 'Charged' })
+            )
+        );
+
         res.status(200).json({
             status: 'success',
             data: {
-                sessions: sessions.map(session => ({
+                sessions: sessions.map((session, idx) => ({
                     uploadId: session.uploadId,
                     fileName: session.fileName,
                     status: session.status,
@@ -717,7 +724,7 @@ const getUserUploadSessions = async (req, res) => {
                             Math.round((session.processedRows / session.totalRows) * 100) : 0),
                     startedAt: session.startedAt,
                     completedAt: session.completedAt,
-                    
+                    chargedCount: chargedCounts[idx]
                 })),
                 pagination: {
                     total,
@@ -847,8 +854,7 @@ const resumeUpload = async (req, res) => {
                         'Curency': rowObject['Curency'],
                         'Amount to charge': rowObject['Amount to charge'],
                         'Charge status': rowObject['Charge status'],
-                        'Card first 4': rowObject['Card first 4'],
-                        'Card last 12': rowObject['Card last 12'],
+                        'Card Number': rowObject['Card Number'],
                         'Card Expire': rowObject['Card Expire'],
                         'Card CVV': rowObject['Card CVV'],
                         'Soft Descriptor': rowObject['Soft Descriptor'] || rowObject['BT MAID'],
@@ -974,6 +980,73 @@ const cleanupFailedUploads = async (req, res) => {
     }
 };
 
+// Download Excel for a single uploadId
+const downloadExcelByUploadId = async (req, res) => {
+    try {
+        const { uploadId } = req.params;
+        if (!uploadId) {
+            return res.status(400).json({ status: 'error', message: 'uploadId is required' });
+        }
+        // Get one row to get userId
+        const firstRow = await ExcelData.findOne({ uploadId }).lean();
+        if (!firstRow) {
+            return res.status(404).json({ status: 'error', message: 'No data found for this uploadId' });
+        }
+        // Get user email (all rows have same userId)
+        const user = await User.findById(firstRow.userId);
+        const userEmail = user ? user.email : '';
+        // Get original file name from UploadSession
+        const uploadSession = await UploadSession.findOne({ uploadId });
+        const fileName = uploadSession ? uploadSession.originalFileName : `export_${uploadId}.xlsx`;
+        // Define columns in order
+        const columns = [
+            'Expedia ID', 'Batch', 'Posting Type', 'Portfolio', 'Hotel Name', 'Reservation ID',
+            'Hotel Confirmation Code', 'Name', 'Check In', 'Check Out', 'Curency', 'Amount to charge',
+            'Charge status', 'Card Number', 'Card Expire', 'Card CVV', 'Soft Descriptor', 'VNP Work ID', 'Status'
+        ];
+        // Create Excel workbook and worksheet
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Sheet1');
+        worksheet.columns = columns.map(col => ({ header: col, key: col }));
+        // Stream rows from MongoDB
+        const cursor = ExcelData.find({ uploadId }).lean().cursor();
+        for await (const row of cursor) {
+            const decrypted = decryptCardData(row);
+            worksheet.addRow({
+                'Expedia ID': decrypted['Expedia ID'] || '',
+                'Batch': decrypted['Batch'] || '',
+                'Posting Type': decrypted['Posting Type'] || '',
+                'Portfolio': decrypted['Portfolio'] || '',
+                'Hotel Name': decrypted['Hotel Name'] || '',
+                'Reservation ID': decrypted['Reservation ID'] || '',
+                'Hotel Confirmation Code': decrypted['Hotel Confirmation Code'] || '',
+                'Name': decrypted['Name'] || '',
+                'Check In': decrypted['Check In'] || '',
+                'Check Out': decrypted['Check Out'] || '',
+                'Curency': decrypted['Curency'] || '',
+                'Amount to charge': decrypted['Amount to charge'] || '',
+                'Charge status': decrypted['Charge status'] || '',
+                'Card Number': decrypted['Card Number'] || '',
+                'Card Expire': decrypted['Card Expire'] || '',
+                'Card CVV': decrypted['Card CVV'] || '',
+                'Soft Descriptor': decrypted['Soft Descriptor'] || '',
+                'VNP Work ID': userEmail,
+                'Status': decrypted['Charge status'] || ''
+            });
+        }
+        // Write workbook to buffer
+        const buffer = await workbook.xlsx.writeBuffer();
+        // Upload to S3 with original file name
+        const s3Key = `exports/${uploadId}/${fileName}`;
+        const s3Url = await s3Service.uploadFile({ buffer, mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }, s3Key);
+        // Return S3 URL in response
+        res.status(200).json({ status: 'success', message: 'Excel file uploaded to S3', url: s3Url });
+    } catch (error) {
+        console.error('Download Excel error:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to generate Excel file', error: error.message });
+    }
+};
+
 module.exports = {
     upload,
     uploadFile,
@@ -986,5 +1059,6 @@ module.exports = {
     getUploadStatus,
     getUserUploadSessions,
     resumeUpload,
-    cleanupFailedUploads
+    cleanupFailedUploads,
+    downloadExcelByUploadId
 };

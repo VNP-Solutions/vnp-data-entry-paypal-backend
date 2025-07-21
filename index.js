@@ -103,6 +103,7 @@ app.post('/api/update-sheet', authenticateToken, fileController.updateSheet);
 app.get('/api/user-files', authenticateToken, fileController.getUserFiles);
 app.get('/api/file-headers', authenticateToken, fileController.getFileHeaders);
 app.delete('/api/delete-file/:documentId', authenticateToken, fileController.deleteFile);
+app.get('/api/files/:uploadId/download', fileController.downloadExcelByUploadId);
 
 // Upload Management API Routes (protected)
 app.get('/api/upload/status/:uploadId', authenticateToken, fileController.getUploadStatus);
@@ -112,6 +113,7 @@ app.delete('/api/upload/cleanup', authenticateToken, fileController.cleanupFaile
 
 // PayPal Payment API Routes (protected)
 app.post('/api/paypal/process-payment', authenticateToken, paypalController.processPayment);
+app.post('/api/paypal/process-bulk-payments', authenticateToken, paypalController.processBulkPayments);
 
 // Stripe Connect API Routes (protected)
 app.post('/api/stripe/create-account', authenticateToken, stripeController.createAccount);
