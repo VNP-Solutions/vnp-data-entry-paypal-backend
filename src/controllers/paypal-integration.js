@@ -16,7 +16,7 @@ const {
 } = process.env;
 
 // PayPal Partner Attribution ID (BN Code) - Replace with your actual BN code
-const PAYPAL_BN_CODE = process.env.PAYPAL_BN_CODE || 'VNPSolutions_Cart_EC';
+const PAYPAL_BN_CODE = process.env.PAYPAL_BN_CODE || 'VNPSolutionsMOR_SP';
 
 // Initialize PayPal client
 const client = new Client({
@@ -281,10 +281,81 @@ const processPayment = async (req, res) => {
             avsCode: jsonResponse.purchase_units[0]?.payments?.captures[0]?.processor_response?.avs_code,
             cvvCode: jsonResponse.purchase_units[0]?.payments?.captures[0]?.processor_response?.cvv_code,
             createTime: jsonResponse.create_time,
-            updateTime: jsonResponse.update_time
+            updateTime: jsonResponse.update_time,
+            captureStatus: jsonResponse.purchase_units[0]?.payments?.captures[0]?.status
         };
 
-        // Update the ExcelData record with payment information
+        // Check if payment was declined
+        const captureStatus = jsonResponse.purchase_units[0]?.payments?.captures[0]?.status;
+        
+        if (captureStatus === 'DECLINED') {
+            // Get decline reason from processor response
+            const processorResponse = jsonResponse.purchase_units[0]?.payments?.captures[0]?.processor_response;
+            const responseCode = processorResponse?.response_code;
+            const avsCode = processorResponse?.avs_code;
+            const cvvCode = processorResponse?.cvv_code;
+            
+            // Map response codes to user-friendly messages
+            const getDeclineReason = (code) => {
+                const declineCodes = {
+                    '0500': 'Transaction declined by issuing bank',
+                    '0510': 'Invalid card number',
+                    '0520': 'Invalid expiration date',
+                    '0530': 'Invalid CVV code',
+                    '0540': 'Insufficient funds',
+                    '0550': 'Card expired',
+                    '0560': 'Card restricted',
+                    '0570': 'Transaction not permitted',
+                    '0580': 'Invalid merchant',
+                    '0590': 'Transaction amount exceeds limit'
+                };
+                return declineCodes[code] || 'Payment declined by card issuer';
+            };
+            
+            const declineReason = getDeclineReason(responseCode);
+            
+            // Additional context based on AVS/CVV codes
+            let additionalInfo = '';
+            if (avsCode && avsCode !== 'Y') {
+                additionalInfo += ' Address verification failed.';
+            }
+            if (cvvCode && cvvCode !== 'M') {
+                additionalInfo += ' CVV verification failed.';
+            }
+            
+            console.log(`Payment declined for documentId ${documentId}: ${declineReason}`);
+            
+            // Return decline response without updating database
+            return res.status(400).json({
+                status: 'declined',
+                message: 'Payment was declined',
+                data: {
+                    ...jsonResponse,
+                    paymentDetails: paymentDetails,
+                    declineReason: declineReason + additionalInfo,
+                    responseCode: responseCode,
+                    avsCode: avsCode,
+                    cvvCode: cvvCode,
+                    databaseUpdated: false
+                }
+            });
+        }
+
+        // Only proceed with database update if payment was successful (COMPLETED)
+        if (captureStatus !== 'COMPLETED') {
+            console.log(`Payment status is ${captureStatus}, not updating database`);
+            return res.status(400).json({
+                status: 'error',
+                message: `Payment status is ${captureStatus}. Expected COMPLETED.`,
+                data: {
+                    ...jsonResponse,
+                    paymentDetails: paymentDetails,
+                    databaseUpdated: false
+                }
+            });
+        }
+
+        // Update the ExcelData record with payment information (only for successful payments)
         try {
             // Prepare card data for encryption
             const cardDataToEncrypt = {
@@ -497,38 +568,144 @@ const processBulkPayments = async (req, res) => {
                     avsCode: jsonResponse.purchase_units[0]?.payments?.captures[0]?.processor_response?.avs_code,
                     cvvCode: jsonResponse.purchase_units[0]?.payments?.captures[0]?.processor_response?.cvv_code,
                     createTime: jsonResponse.create_time,
-                    updateTime: jsonResponse.update_time
+                    updateTime: jsonResponse.update_time,
+                    captureStatus: jsonResponse.purchase_units[0]?.payments?.captures[0]?.status
                 };
 
-                // Update the ExcelData record
-                await ExcelData.findByIdAndUpdate(
-                    row._id,
-                    {
-                        'Charge status': 'Charged',
-                        'Card Number': encryptedCardData['Card Number'],
-                        'Card Expire': encryptedCardData['Card Expire'],
-                        'Card CVV': encryptedCardData['Card CVV'],
-                        'Soft Descriptor': row['Soft Descriptor'],
-                        'Status': 'Payment Processed',
-                        // Add payment details as additional fields
-                        paypalOrderId: paymentDetails.orderId,
-                        paypalCaptureId: paymentDetails.captureId,
-                        paypalNetworkTransactionId: paymentDetails.networkTransactionId,
-                        paypalFee: paymentDetails.paypalFee,
-                        paypalNetAmount: paymentDetails.netAmount,
-                        paypalCardBrand: paymentDetails.cardBrand,
-                        paypalCardType: paymentDetails.cardType,
-                        paypalAvsCode: paymentDetails.avsCode,
-                        paypalCvvCode: paymentDetails.cvvCode,
-                        paypalCreateTime: paymentDetails.createTime,
-                        paypalUpdateTime: paymentDetails.updateTime,
-                        paypalStatus: paymentDetails.status,
-                        paypalAmount: paymentDetails.amount,
-                        paypalCurrency: paymentDetails.currency,
-                        paypalCardLastDigits: paymentDetails.cardLastDigits
-                    },
-                    { new: true }
-                );
+                // Check if payment was declined
+                const captureStatus = jsonResponse.purchase_units[0]?.payments?.captures[0]?.status;
+                
+                if (captureStatus === 'DECLINED') {
+                    // Get decline reason from processor response
+                    const processorResponse = jsonResponse.purchase_units[0]?.payments?.captures[0]?.processor_response;
+                    const responseCode = processorResponse?.response_code;
+                    const avsCode = processorResponse?.avs_code;
+                    const cvvCode = processorResponse?.cvv_code;
+                    
+                    // Map response codes to user-friendly messages
+                    const getDeclineReason = (code) => {
+                        const declineCodes = {
+                            '0500': 'Transaction declined by issuing bank',
+                            '0510': 'Invalid card number',
+                            '0520': 'Invalid expiration date',
+                            '0530': 'Invalid CVV code',
+                            '0540': 'Insufficient funds',
+                            '0550': 'Card expired',
+                            '0560': 'Card restricted',
+                            '0570': 'Transaction not permitted',
+                            '0580': 'Invalid merchant',
+                            '0590': 'Transaction amount exceeds limit'
+                        };
+                        return declineCodes[code] || 'Payment declined by card issuer';
+                    };
+                    
+                    const declineReason = getDeclineReason(responseCode);
+                    
+                    // Additional context based on AVS/CVV codes
+                    let additionalInfo = '';
+                    if (avsCode && avsCode !== 'Y') {
+                        additionalInfo += ' Address verification failed.';
+                    }
+                    if (cvvCode && cvvCode !== 'M') {
+                        additionalInfo += ' CVV verification failed.';
+                    }
+                    
+                    console.log(`Bulk payment declined for documentId ${row._id}: ${declineReason}`);
+                    
+                    // Return decline response without updating database
+                    return {
+                        documentId: row._id,
+                        status: 'declined',
+                        declineReason: declineReason + additionalInfo,
+                        responseCode: responseCode,
+                        avsCode: avsCode,
+                        cvvCode: cvvCode,
+                        response: jsonResponse,
+                        databaseUpdated: false
+                    };
+                }
+
+                // Only proceed with database update if payment was successful (COMPLETED)
+                if (captureStatus !== 'COMPLETED') {
+                    console.log(`Bulk payment status is ${captureStatus} for documentId ${row._id}, not updating database`);
+                    return {
+                        documentId: row._id,
+                        status: 'error',
+                        error: `Payment status is ${captureStatus}. Expected COMPLETED.`,
+                        response: jsonResponse,
+                        databaseUpdated: false
+                    };
+                }
+
+                // Update the ExcelData record (only for successful payments)
+                try {
+                    // Prepare card data for encryption
+                    const cardDataToEncrypt = {
+                        'Card Number': decrypted['Card Number'],
+                        'Card Expire': decrypted['Card Expire'],
+                        'Card CVV': decrypted['Card CVV']
+                    };
+                    const encryptedCardData = encryptCardData(cardDataToEncrypt);
+
+                    // First, get the existing record to check for OTA information
+                    let otaId = null;
+                    let otaName = null;
+                    if (row.otaId && row.otaId.name) {
+                        otaName = row.otaId.name;
+                        console.log(`Found OTA in row: ${otaName}`);
+                        const otaRecord = await OTA.findOne({ name: otaName, isActive: true });
+                        if (otaRecord) {
+                            otaId = otaRecord._id;
+                            console.log(`Found OTA record ID: ${otaId}`);
+                        } else {
+                            console.log(`No OTA record found for: ${otaName}`);
+                        }
+                    }
+                    
+                    const updatedRecord = await ExcelData.findByIdAndUpdate(
+                        row._id,
+                        {
+                            'Charge status': 'Charged',
+                            'Card Number': encryptedCardData['Card Number'],
+                            'Card Expire': encryptedCardData['Card Expire'],
+                            'Card CVV': encryptedCardData['Card CVV'],
+                            'Soft Descriptor': row['Soft Descriptor'],
+                            'Status': 'Payment Processed',
+                            // Add payment details as additional fields
+                            paypalOrderId: paymentDetails.orderId,
+                            paypalCaptureId: paymentDetails.captureId,
+                            paypalNetworkTransactionId: paymentDetails.networkTransactionId,
+                            paypalFee: paymentDetails.paypalFee,
+                            paypalNetAmount: paymentDetails.netAmount,
+                            paypalCardBrand: paymentDetails.cardBrand,
+                            paypalCardType: paymentDetails.cardType,
+                            paypalAvsCode: paymentDetails.avsCode,
+                            paypalCvvCode: paymentDetails.cvvCode,
+                            paypalCreateTime: paymentDetails.createTime,
+                            paypalUpdateTime: paymentDetails.updateTime,
+                            paypalStatus: paymentDetails.status,
+                            paypalAmount: paymentDetails.amount,
+                            paypalCurrency: paymentDetails.currency,
+                            paypalCardLastDigits: paymentDetails.cardLastDigits,
+                            ota: otaName, // Preserve original OTA name from record
+                            otaId: otaId
+                        },
+                        { new: true }
+                    );
+
+                    if (!updatedRecord) {
+                        console.error('ExcelData record not found for documentId:', row._id);
+                        return {
+                            documentId: row._id,
+                            status: 'error',
+                            message: 'ExcelData record not found'
+                        };
+                    }
+
+                } catch (dbError) {
+                    console.error('Database update error during bulk payment:', dbError);
+                    // Don't fail the bulk payment response if DB update fails
+                }
 
                 return {
                     documentId: row._id,
@@ -549,7 +726,8 @@ const processBulkPayments = async (req, res) => {
         const summary = {
             total: results.length,
             success: results.filter(r => r.status === 'success').length,
-            error: results.filter(r => r.status === 'error').length
+            error: results.filter(r => r.status === 'error').length,
+            declined: results.filter(r => r.status === 'declined').length
         };
         res.status(200).json({ status: 'success', summary, results });
     } catch (error) {
@@ -618,8 +796,10 @@ const processDirectRefund = async (refundData) => {
         // Get access token using the client's authentication
         const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
         
-        // Use sandbox environment (hardcoded for now since client.environment is undefined)
-        const baseURL = 'https://api-m.sandbox.paypal.com';
+        // Use environment-based URL configuration
+        const baseURL = process.env.NODE_ENV === 'production' 
+            ? 'https://api-m.paypal.com'           // Production
+            : 'https://api-m.sandbox.paypal.com'; // Sandbox
         
         console.log('Using PayPal base URL:', baseURL);
         

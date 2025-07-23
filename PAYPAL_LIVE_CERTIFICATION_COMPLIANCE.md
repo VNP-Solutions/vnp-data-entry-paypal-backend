@@ -24,7 +24,7 @@ All **MANDATORY** requirements have been successfully implemented in your codeba
 
 **Code Location:** `src/controllers/paypal-integration.js:17`
 ```javascript
-const PAYPAL_BN_CODE = process.env.PAYPAL_BN_CODE || 'VNPSolutions_Cart_EC';
+const PAYPAL_BN_CODE = process.env.PAYPAL_BN_CODE || 'VNPSolutionsMOR_SP';
 
 // Applied in all API calls:
 payPalPartnerAttributionId: PAYPAL_BN_CODE
