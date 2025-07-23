@@ -33,6 +33,10 @@ const excelDataSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    'OTA': {
+        type: String,
+        default: null
+    },
     'Posting Type': {
         type: String,
         default: null
@@ -160,6 +164,64 @@ const excelDataSchema = new mongoose.Schema({
     },
     paypalCardLastDigits: {
         type: String,
+        default: null
+    },
+    // PayPal Refund Details Fields
+    paypalRefundId: {
+        type: String,
+        default: null
+    },
+    paypalRefundStatus: {
+        type: String,
+        default: null
+    },
+    paypalRefundAmount: {
+        type: String,
+        default: null
+    },
+    paypalRefundCurrency: {
+        type: String,
+        default: null
+    },
+    paypalRefundGrossAmount: {
+        type: String,
+        default: null
+    },
+    paypalRefundFee: {
+        type: String,
+        default: null
+    },
+    paypalRefundNetAmount: {
+        type: String,
+        default: null
+    },
+    paypalTotalRefunded: {
+        type: String,
+        default: null
+    },
+    paypalRefundCreateTime: {
+        type: String,
+        default: null
+    },
+    paypalRefundUpdateTime: {
+        type: String,
+        default: null
+    },
+    paypalRefundInvoiceId: {
+        type: String,
+        default: null
+    },
+    paypalRefundCustomId: {
+        type: String,
+        default: null
+    },
+    paypalRefundNote: {
+        type: String,
+        default: null
+    },
+    otaId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'OTA',
         default: null
     }
 }, {

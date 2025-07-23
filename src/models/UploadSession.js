@@ -66,6 +66,17 @@ const uploadSessionSchema = new mongoose.Schema({
     maxRetries: {
         type: Number,
         default: 3
+    },
+    // OTA (Online Travel Agency) Fields
+    ota: {
+        type: String,
+        enum: ['Expedia', 'Booking.com', 'Agoda'],
+        default: null
+    },
+    otaId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'OTA',
+        default: null
     }
 }, {
     timestamps: true

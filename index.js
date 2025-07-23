@@ -11,6 +11,7 @@ const authController = require('./src/controllers/auth-controller');
 const invitationController = require('./src/controllers/invitation-controller');
 const paypalController = require('./src/controllers/paypal-integration');
 const stripeController = require('./src/controllers/stripe-controller');
+const otaController = require('./src/controllers/ota-controller');
 const { authenticateToken } = require('./src/middleware/auth');
 
 // Import database connection
@@ -114,12 +115,28 @@ app.delete('/api/upload/cleanup', authenticateToken, fileController.cleanupFaile
 // PayPal Payment API Routes (protected)
 app.post('/api/paypal/process-payment', authenticateToken, paypalController.processPayment);
 app.post('/api/paypal/process-bulk-payments', authenticateToken, paypalController.processBulkPayments);
+app.get('/api/paypal/payment-details/:documentId', authenticateToken, paypalController.getPaymentDetails);
+
+// PayPal Refund API Routes (protected)
+app.post('/api/paypal/process-refund', authenticateToken, paypalController.processRefund);
+app.post('/api/paypal/process-bulk-refunds', authenticateToken, paypalController.processBulkRefunds);
+app.get('/api/paypal/refund/:refundId', authenticateToken, paypalController.getRefundDetails);
 
 // Stripe Connect API Routes (protected)
 app.post('/api/stripe/create-account', authenticateToken, stripeController.createAccount);
 app.get('/api/stripe/accounts', authenticateToken, stripeController.listAccounts);
 app.get('/api/stripe/account/:accountId', authenticateToken, stripeController.getAccountById);
 app.delete('/api/stripe/account/:accountId', authenticateToken, stripeController.deleteAccount);
+
+// OTA API Routes (protected)
+app.get('/api/ota', authenticateToken, otaController.getAllOTAs);
+app.get('/api/ota/:id', authenticateToken, otaController.getOTAById);
+app.get('/api/ota/name/:name', authenticateToken, otaController.getOTAByName);
+app.post('/api/ota', authenticateToken, otaController.createOTA);
+app.put('/api/ota/:id', authenticateToken, otaController.updateOTA);
+app.delete('/api/ota/:id', authenticateToken, otaController.deleteOTA);
+app.patch('/api/ota/:id/restore', authenticateToken, otaController.restoreOTA);
+app.post('/api/ota/seed', authenticateToken, otaController.seedOTAData);
 
 // Admin API Routes (protected)
 app.get('/api/admin/excel-data', authenticateToken, paypalController.getAdminExcelData);

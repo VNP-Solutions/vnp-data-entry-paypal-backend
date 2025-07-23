@@ -1,24 +1,13 @@
 const mongoose = require('mongoose');
 const XLSX = require('xlsx');
 const ExcelData = require('../models/ExcelData');
+const OTA = require('../models/OTA');
 const UploadSession = require('../models/UploadSession');
 const { upload, s3Service } = require('../config/s3');
 const { encryptCardData, decryptCardData } = require('../utils/encryption');
 const User = require('../models/User');
 const ExcelJS = require('exceljs');
 
-// Helper function to advance a column name
-function nextCol(col) {
-    const ords = col.split('').map(c => c.charCodeAt(0) - 65);
-    let carry = 1;
-    for (let i = ords.length - 1; i >= 0; i--) {
-        const v = ords[i] + carry;
-        ords[i] = v % 26;
-        carry = Math.floor(v / 26);
-    }
-    if (carry) ords.unshift(carry - 1);
-    return ords.map(n => String.fromCharCode(n + 65)).join('');
-}
 
 // Generate unique upload ID
 function generateUploadId() {
@@ -159,7 +148,10 @@ const uploadFile = async (req, res) => {
             status: 'processing',
             vnpWorkId: vnpWorkId,
             headers: headers,
-            batchSize: 100
+            batchSize: 100,
+            // Add OTA fields to session for resume functionality
+            ota: null, // OTA will be determined from Excel data
+            otaId: null
         });
 
         await uploadSession.save({ session });
@@ -236,6 +228,26 @@ const uploadFile = async (req, res) => {
                             }
                         }
                     }
+
+                    // Process OTA field from Excel sheet
+                    let otaRecord = null;
+                    const otaFromExcel = rowObject['OTA']?.trim();
+                    
+                    if (otaFromExcel) {
+                        try {
+                            console.log(`Processing OTA from Excel: "${otaFromExcel}"`);
+                            otaRecord = await OTA.findOne({ name: otaFromExcel, isActive: true });
+                            
+                            if (otaRecord) {
+                                console.log(`Found OTA record for ${otaFromExcel}:`, otaRecord._id);
+                            } else {
+                                console.log(`No OTA record found for: "${otaFromExcel}"`);
+                            }
+                        } catch (otaError) {
+                            console.error('Error finding OTA record:', otaError);
+                        }
+                    }
+
                     const mappedData = {
                         userId: userId,
                         uploadId: uploadId,
@@ -244,6 +256,7 @@ const uploadFile = async (req, res) => {
                         rowNumber: row,
                         'Expedia ID': rowObject['Expedia ID'],
                         'Batch': rowObject['Batch'],
+                        'OTA': rowObject['OTA'], // Store the OTA name from Excel
                         'Posting Type': rowObject['Posting Type'],
                         'Portfolio': rowObject['Portfolio'],
                         'Hotel Name': rowObject['Hotel Name'],
@@ -260,7 +273,10 @@ const uploadFile = async (req, res) => {
                         'Card CVV': rowObject['Card CVV'],
                         'Soft Descriptor': rowObject['Soft Descriptor'] || rowObject['BT MAID'],
                         'VNP Work ID': rowObject['VNP Work ID'],
-                        'Status': rowObject['Status']
+                        'Status': rowObject['Status'],
+                        // Add OTA fields based on Excel data
+                        ota: otaRecord?.name || otaFromExcel || null,
+                        otaId: otaRecord?._id || null
                     };
 
                     const encryptedData = encryptCardData(mappedData);
@@ -385,6 +401,7 @@ const getRowData = async (req, res) => {
 
         // Get paginated data for the user with filters
         const rowData = await ExcelData.find(query)
+            .populate('otaId', 'name displayName customer billingAddress isActive') // Populate OTA data
             .skip(skip)
             .limit(parseInt(limit))
             .sort({ createdAt: -1 });
@@ -440,7 +457,7 @@ const getSingleRowData = async (req, res) => {
         const rowData = await ExcelData.findOne({
             _id: documentId,
             userId: userId
-        });
+        }).populate('otaId', 'name displayName customer billingAddress isActive'); // Populate OTA data
 
         if (!rowData) {
             return res.status(404).json({
@@ -530,7 +547,7 @@ const updateSheet = async (req, res) => {
                 $set: encryptedUpdateData
             },
             { new: true }
-        );
+        ).populate('otaId', 'name displayName customer billingAddress isActive'); // Populate OTA data
 
         if (!updateResult) {
             return res.status(404).json({
@@ -569,6 +586,7 @@ const getUserFiles = async (req, res) => {
 
         // Get recent data (last 10 records)
         const recentData = await ExcelData.find({ userId: userId })
+            .populate('otaId', 'name displayName customer billingAddress isActive') // Populate OTA data
             .sort({ createdAt: -1 })
             .limit(10);
 
@@ -921,6 +939,26 @@ const resumeUpload = async (req, res) => {
                             }
                         }
                     }
+
+                    // Process OTA field from Excel sheet in resume upload
+                    let otaRecord = null;
+                    const otaFromExcel = rowObject['OTA']?.trim();
+                    
+                    if (otaFromExcel) {
+                        try {
+                            console.log(`Processing OTA from Excel (resume): "${otaFromExcel}"`);
+                            otaRecord = await OTA.findOne({ name: otaFromExcel, isActive: true });
+                            
+                            if (otaRecord) {
+                                console.log(`Found OTA record for ${otaFromExcel}:`, otaRecord._id);
+                            } else {
+                                console.log(`No OTA record found for: "${otaFromExcel}"`);
+                            }
+                        } catch (otaError) {
+                            console.error('Error finding OTA record in resume:', otaError);
+                        }
+                    }
+
                     const mappedData = {
                         userId: userId,
                         uploadId: uploadId,
@@ -929,6 +967,7 @@ const resumeUpload = async (req, res) => {
                         rowNumber: row,
                         'Expedia ID': rowObject['Expedia ID'],
                         'Batch': rowObject['Batch'],
+                        'OTA': rowObject['OTA'], // Store the OTA name from Excel
                         'Posting Type': rowObject['Posting Type'],
                         'Portfolio': rowObject['Portfolio'],
                         'Hotel Name': rowObject['Hotel Name'],
@@ -945,7 +984,10 @@ const resumeUpload = async (req, res) => {
                         'Card CVV': rowObject['Card CVV'],
                         'Soft Descriptor': rowObject['Soft Descriptor'] || rowObject['BT MAID'],
                         'VNP Work ID': rowObject['VNP Work ID'],
-                        'Status': rowObject['Status']
+                        'Status': rowObject['Status'],
+                        // Add OTA fields based on Excel data
+                        ota: otaRecord?.name || otaFromExcel || null,
+                        otaId: otaRecord?._id || null
                     };
 
                     const encryptedData = encryptCardData(mappedData);
@@ -1084,11 +1126,21 @@ const downloadExcelByUploadId = async (req, res) => {
         // Get original file name from UploadSession
         const uploadSession = await UploadSession.findOne({ uploadId });
         const fileName = uploadSession ? uploadSession.originalFileName : `export_${uploadId}.xlsx`;
-        // Define columns in order
+        // Define columns in order - including PayPal payment fields
         const columns = [
-            'Expedia ID', 'Batch', 'Posting Type', 'Portfolio', 'Hotel Name', 'Reservation ID',
+            'Expedia ID', 'Batch', 'OTA', 'Posting Type', 'Portfolio', 'Hotel Name', 'Reservation ID',
             'Hotel Confirmation Code', 'Name', 'Check In', 'Check Out', 'Curency', 'Amount to charge',
-            'Charge status', 'Card Number', 'Card Expire', 'Card CVV', 'Soft Descriptor', 'VNP Work ID', 'Status'
+            'Charge status', 'Card Number', 'Card Expire', 'Card CVV', 'Soft Descriptor', 'VNP Work ID', 'Status',
+            // PayPal Payment Fields
+            'PayPal Order ID', 'PayPal Capture ID', 'PayPal Network Transaction ID', 'PayPal Fee', 
+            'PayPal Net Amount', 'PayPal Card Brand', 'PayPal Card Type', 'PayPal AVS Code', 
+            'PayPal CVV Code', 'PayPal Create Time', 'PayPal Update Time', 'PayPal Status', 
+            'PayPal Amount', 'PayPal Currency', 'PayPal Card Last Digits',
+            // PayPal Refund Fields
+            'PayPal Refund ID', 'PayPal Refund Status', 'PayPal Refund Amount', 'PayPal Refund Currency',
+            'PayPal Refund Gross Amount', 'PayPal Refund Fee', 'PayPal Refund Net Amount', 
+            'PayPal Refund Create Time', 'PayPal Refund Update Time', 'PayPal Refund Invoice ID',
+            'PayPal Refund Custom ID', 'PayPal Refund Note'
         ];
         // Create Excel workbook and worksheet
         const workbook = new ExcelJS.Workbook();
@@ -1101,6 +1153,7 @@ const downloadExcelByUploadId = async (req, res) => {
             worksheet.addRow({
                 'Expedia ID': decrypted['Expedia ID'] || '',
                 'Batch': decrypted['Batch'] || '',
+                'OTA': decrypted['OTA'] || '',
                 'Posting Type': decrypted['Posting Type'] || '',
                 'Portfolio': decrypted['Portfolio'] || '',
                 'Hotel Name': decrypted['Hotel Name'] || '',
@@ -1117,7 +1170,35 @@ const downloadExcelByUploadId = async (req, res) => {
                 'Card CVV': decrypted['Card CVV'] || '',
                 'Soft Descriptor': decrypted['Soft Descriptor'] || '',
                 'VNP Work ID': userEmail,
-                'Status': decrypted['Charge status'] || ''
+                // Add PayPal fields using correct database field names
+                'PayPal Order ID': decrypted['paypalOrderId'] || '',
+                'PayPal Capture ID': decrypted['paypalCaptureId'] || '',
+                'PayPal Network Transaction ID': decrypted['paypalNetworkTransactionId'] || '',
+                'PayPal Fee': decrypted['paypalFee'] || '',
+                'PayPal Net Amount': decrypted['paypalNetAmount'] || '',
+                'PayPal Card Brand': decrypted['paypalCardBrand'] || '',
+                'PayPal Card Type': decrypted['paypalCardType'] || '',
+                'PayPal AVS Code': decrypted['paypalAvsCode'] || '',
+                'PayPal CVV Code': decrypted['paypalCvvCode'] || '',
+                'PayPal Create Time': decrypted['paypalCreateTime'] || '',
+                'PayPal Update Time': decrypted['paypalUpdateTime'] || '',
+                'PayPal Status': decrypted['paypalStatus'] || '',
+                'PayPal Amount': decrypted['paypalAmount'] || '',
+                'PayPal Currency': decrypted['paypalCurrency'] || '',
+                'PayPal Card Last Digits': decrypted['paypalCardLastDigits'] || '',
+                // Add PayPal Refund fields
+                'PayPal Refund ID': decrypted['paypalRefundId'] || '',
+                'PayPal Refund Status': decrypted['paypalRefundStatus'] || '',
+                'PayPal Refund Amount': decrypted['paypalRefundAmount'] || '',
+                'PayPal Refund Currency': decrypted['paypalRefundCurrency'] || '',
+                'PayPal Refund Gross Amount': decrypted['paypalRefundGrossAmount'] || '',
+                'PayPal Refund Fee': decrypted['paypalRefundFee'] || '',
+                'PayPal Refund Net Amount': decrypted['paypalRefundNetAmount'] || '',
+                'PayPal Refund Create Time': decrypted['paypalRefundCreateTime'] || '',
+                'PayPal Refund Update Time': decrypted['paypalRefundUpdateTime'] || '',
+                'PayPal Refund Invoice ID': decrypted['paypalRefundInvoiceId'] || '',
+                'PayPal Refund Custom ID': decrypted['paypalRefundCustomId'] || '',
+                'PayPal Refund Note': decrypted['paypalRefundNote'] || ''
             });
         }
         // Write workbook to buffer
