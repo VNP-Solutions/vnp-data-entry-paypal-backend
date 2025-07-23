@@ -282,7 +282,8 @@ const processPayment = async (req, res) => {
             cvvCode: jsonResponse.purchase_units[0]?.payments?.captures[0]?.processor_response?.cvv_code,
             createTime: jsonResponse.create_time,
             updateTime: jsonResponse.update_time,
-            captureStatus: jsonResponse.purchase_units[0]?.payments?.captures[0]?.status
+            captureStatus: jsonResponse.purchase_units[0]?.payments?.captures[0]?.status,
+            customId: jsonResponse.purchase_units[0]?.payments?.captures[0]?.custom_id
         };
 
         // Check if payment was declined
@@ -414,6 +415,8 @@ const processPayment = async (req, res) => {
                     paypalAmount: paymentDetails.amount,
                     paypalCurrency: paymentDetails.currency,
                     paypalCardLastDigits: paymentDetails.cardLastDigits,
+                    paypalCaptureStatus: paymentDetails.captureStatus,
+                    paypalCustomId: paymentDetails.customId,
                     ota: otaName, // Preserve original OTA name from record
                     otaId: otaId
                 },
@@ -569,7 +572,8 @@ const processBulkPayments = async (req, res) => {
                     cvvCode: jsonResponse.purchase_units[0]?.payments?.captures[0]?.processor_response?.cvv_code,
                     createTime: jsonResponse.create_time,
                     updateTime: jsonResponse.update_time,
-                    captureStatus: jsonResponse.purchase_units[0]?.payments?.captures[0]?.status
+                    captureStatus: jsonResponse.purchase_units[0]?.payments?.captures[0]?.status,
+                    customId: jsonResponse.purchase_units[0]?.payments?.captures[0]?.custom_id
                 };
 
                 // Check if payment was declined
@@ -687,6 +691,8 @@ const processBulkPayments = async (req, res) => {
                             paypalAmount: paymentDetails.amount,
                             paypalCurrency: paymentDetails.currency,
                             paypalCardLastDigits: paymentDetails.cardLastDigits,
+                            paypalCaptureStatus: paymentDetails.captureStatus,
+                            paypalCustomId: paymentDetails.customId,
                             ota: otaName, // Preserve original OTA name from record
                             otaId: otaId
                         },

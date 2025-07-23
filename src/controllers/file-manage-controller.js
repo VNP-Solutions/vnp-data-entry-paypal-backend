@@ -1135,7 +1135,8 @@ const downloadExcelByUploadId = async (req, res) => {
             'PayPal Order ID', 'PayPal Capture ID', 'PayPal Network Transaction ID', 'PayPal Fee', 
             'PayPal Net Amount', 'PayPal Card Brand', 'PayPal Card Type', 'PayPal AVS Code', 
             'PayPal CVV Code', 'PayPal Create Time', 'PayPal Update Time', 'PayPal Status', 
-            'PayPal Amount', 'PayPal Currency', 'PayPal Card Last Digits',
+            'PayPal Amount', 'PayPal Currency', 'PayPal Card Last Digits', 'PayPal Capture Status', 
+            'PayPal Custom ID',
             // PayPal Refund Fields
             'PayPal Refund ID', 'PayPal Refund Status', 'PayPal Refund Amount', 'PayPal Refund Currency',
             'PayPal Refund Gross Amount', 'PayPal Refund Fee', 'PayPal Refund Net Amount', 
@@ -1186,6 +1187,8 @@ const downloadExcelByUploadId = async (req, res) => {
                 'PayPal Amount': decrypted['paypalAmount'] || '',
                 'PayPal Currency': decrypted['paypalCurrency'] || '',
                 'PayPal Card Last Digits': decrypted['paypalCardLastDigits'] || '',
+                'PayPal Capture Status': decrypted['paypalCaptureStatus'] || '',
+                'PayPal Custom ID': decrypted['paypalCustomId'] || '',
                 // Add PayPal Refund fields
                 'PayPal Refund ID': decrypted['paypalRefundId'] || '',
                 'PayPal Refund Status': decrypted['paypalRefundStatus'] || '',

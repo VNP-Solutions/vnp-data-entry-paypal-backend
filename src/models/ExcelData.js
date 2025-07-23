@@ -166,6 +166,14 @@ const excelDataSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    paypalCaptureStatus: {
+        type: String,
+        default: null
+    },
+    paypalCustomId: {
+        type: String,
+        default: null
+    },
     // PayPal Refund Details Fields
     paypalRefundId: {
         type: String,
