@@ -127,7 +127,7 @@ const login = async (req, res) => {
 
         // Validate input
         if (!email || !password) {
-            return res.status(400).json({
+            return res.status(403).json({
                 status: 'error',
                 message: 'Email and password are required'
             });
@@ -136,7 +136,7 @@ const login = async (req, res) => {
         // Find user by email
         const user = await User.findOne({ email });
         if (!user) {
-            return res.status(401).json({
+            return res.status(403).json({
                 status: 'error',
                 message: 'Invalid email or password'
             });
@@ -147,7 +147,7 @@ const login = async (req, res) => {
         const isPasswordValid = await bcrypt.compare(password, user.password);
         
         if (!isPasswordValid) {
-            return res.status(401).json({
+            return res.status(403).json({
                 status: 'error',
                 message: 'Invalid email or password'
             });
