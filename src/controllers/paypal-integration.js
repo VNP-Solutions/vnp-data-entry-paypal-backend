@@ -168,28 +168,121 @@ const processDirectPayment = async (paymentData) => {
             console.error('PayPal Error Details:', error.result);
             
             // Extract field and description from error details
-            let errorMessage = 'PayPal Payment Error';
+            let errorMessage = 'Payment processing failed';
             
             if (error.result && error.result.details && Array.isArray(error.result.details)) {
-                const errorDetails = error.result.details.map(detail => ({
-                    field: detail.field || 'Unknown field',
-                    description: detail.description || 'Unknown error'
-                }));
+                const errorDetails = error.result.details;
                 
-                // Format error message with field and description
-                const formattedErrors = errorDetails.map(detail => 
-                    `${detail.field}: ${detail.description}`
-                ).join('; ');
+                // Map common PayPal errors to user-friendly messages
+                const userFriendlyErrors = errorDetails.map(detail => {
+                    const field = detail.field || '';
+                    const description = detail.description || '';
+                    const issue = detail.issue || '';
+                    
+                    // Handle specific common errors
+                    if (issue === 'CARD_EXPIRED' || description.toLowerCase().includes('expired')) {
+                        return 'Your card has expired. Please use a different card.';
+                    }
+                    
+                    if (issue === 'INVALID_CARD_NUMBER' || field.includes('card') && description.toLowerCase().includes('invalid')) {
+                        return 'The card number you entered is invalid. Please check and try again.';
+                    }
+                    
+                    if (issue === 'CARD_TYPE_NOT_SUPPORTED' || description.toLowerCase().includes('not supported')) {
+                        return 'This card type is not supported. Please try a different card.';
+                    }
+                    
+                    if (issue === 'INSUFFICIENT_FUNDS' || description.toLowerCase().includes('insufficient')) {
+                        return 'Your card has insufficient funds. Please use a different card or contact your bank.';
+                    }
+                    
+                    if (issue === 'CARD_DECLINED' || description.toLowerCase().includes('declined')) {
+                        return 'Your card was declined by the bank. Please contact your bank or try a different card.';
+                    }
+                    
+                    if (field.includes('billing_address') || description.toLowerCase().includes('address')) {
+                        return 'There is an issue with the billing address. Please verify your address information.';
+                    }
+                    
+                    if (field.includes('security_code') || field.includes('cvv') || description.toLowerCase().includes('security')) {
+                        return 'The security code (CVV) is incorrect. Please check the 3 or 4 digit code on your card.';
+                    }
+                    
+                    if (description.toLowerCase().includes('amount')) {
+                        return 'There is an issue with the payment amount. Please verify and try again.';
+                    }
+                    
+                    if (description.toLowerCase().includes('currency')) {
+                        return 'The currency is not supported or invalid for this transaction.';
+                    }
+                    
+                    if (description.toLowerCase().includes('duplicate')) {
+                        return 'This appears to be a duplicate transaction. Please wait a moment before trying again.';
+                    }
+                    
+                    if (description.toLowerCase().includes('limit')) {
+                        return 'This transaction exceeds your card limit. Please contact your bank or try a smaller amount.';
+                    }
+                    
+                    if (description.toLowerCase().includes('merchant')) {
+                        return 'There is a temporary issue with payment processing. Please try again later.';
+                    }
+                    
+                    // Generic fallback for unhandled errors
+                    if (description) {
+                        return `Payment error: ${description}`;
+                    }
+                    
+                    return 'Payment processing encountered an error. Please try again.';
+                });
                 
-                errorMessage = `PayPal Error - ${formattedErrors}`;
-            } else {
-                errorMessage = `PayPal Error: ${error.message}`;
+                // Use the first user-friendly error, or combine multiple unique errors
+                const uniqueErrors = [...new Set(userFriendlyErrors)];
+                errorMessage = uniqueErrors.length === 1 ? uniqueErrors[0] : uniqueErrors.join(' ');
+                
+            } else if (error.message) {
+                // Handle general PayPal errors
+                const message = error.message.toLowerCase();
+                
+                if (message.includes('invalid') && message.includes('card')) {
+                    errorMessage = 'Invalid card information. Please check your card details and try again.';
+                } else if (message.includes('declined')) {
+                    errorMessage = 'Your payment was declined. Please contact your bank or try a different card.';
+                } else if (message.includes('expired')) {
+                    errorMessage = 'Your card has expired. Please use a different card.';
+                } else if (message.includes('insufficient')) {
+                    errorMessage = 'Insufficient funds on your card. Please use a different card or contact your bank.';
+                } else if (message.includes('network') || message.includes('connection')) {
+                    errorMessage = 'Network connection error. Please check your internet connection and try again.';
+                } else if (message.includes('timeout')) {
+                    errorMessage = 'Payment processing timed out. Please try again in a few moments.';
+                } else {
+                    errorMessage = `Payment processing failed: ${error.message}`;
+                }
             }
             
             throw new Error(errorMessage);
         }
-        console.error('General Error:', error);
-        throw error;
+        
+        // Handle network and other errors
+        if (error.message) {
+            const message = error.message.toLowerCase();
+            
+            if (message.includes('network') || message.includes('fetch') || message.includes('connection')) {
+                throw new Error('Unable to connect to payment processor. Please check your internet connection and try again.');
+            }
+            
+            if (message.includes('timeout')) {
+                throw new Error('Payment processing timed out. Please try again in a few moments.');
+            }
+            
+            if (message.includes('certificate') || message.includes('ssl') || message.includes('tls')) {
+                throw new Error('Secure connection error. Please try again or contact support if the problem persists.');
+            }
+        }
+        
+        console.error('General Payment Error:', error);
+        throw new Error('An unexpected error occurred during payment processing. Please try again or contact support if the problem persists.');
     }
 };
 
@@ -214,37 +307,192 @@ const processPayment = async (req, res) => {
             documentId
         } = req.body;
 
-        // Validation for required fields
-        if (!amount || !cardNumber || !cardExpiry || !cardCvv || !cardholderName) {
+        // Validation for required fields with specific messages
+        if (!amount) {
             return res.status(400).json({
                 status: 'error',
-                message: 'Amount, card details, and cardholder name are required'
+                message: 'Payment amount is required. Please enter a valid amount to charge.'
+            });
+        }
+
+        if (!cardNumber) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Card number is required. Please enter a valid credit card number.'
+            });
+        }
+
+        if (!cardExpiry) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Card expiry date is required. Please enter the expiry date in MM/YY or YYYY-MM format.'
+            });
+        }
+
+        if (!cardCvv) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Card security code (CVV) is required. Please enter the 3 or 4 digit code from your card.'
+            });
+        }
+
+        if (!cardholderName) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Cardholder name is required. Please enter the name as it appears on your card.'
             });
         }
 
         // Validate amount is a valid number
         const numericAmount = parseFloat(amount);
-        if (isNaN(numericAmount) || numericAmount <= 0) {
+        if (isNaN(numericAmount)) {
             return res.status(400).json({
                 status: 'error',
-                message: 'Amount must be a valid positive number'
+                message: 'Invalid payment amount format. Please enter a valid number (e.g., 25.50).'
             });
         }
 
-        // Validate card number (basic validation)
-        const cleanCardNumber = cardNumber.replace(/\s/g, '');
-        if (cleanCardNumber.length < 13 || cleanCardNumber.length > 19) {
+        if (numericAmount <= 0) {
             return res.status(400).json({
                 status: 'error',
-                message: 'Invalid card number'
+                message: 'Payment amount must be greater than zero. Please enter a positive amount.'
+            });
+        }
+
+        if (numericAmount > 10000) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Payment amount exceeds maximum limit of $10,000. Please contact support for larger transactions.'
+            });
+        }
+
+        // Validate card number (enhanced validation)
+        const cleanCardNumber = cardNumber.replace(/\s/g, '');
+        if (!/^\d+$/.test(cleanCardNumber)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Card number can only contain digits. Please remove any spaces or special characters.'
+            });
+        }
+
+        if (cleanCardNumber.length < 13) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Card number is too short. Please enter a complete card number (13-19 digits).'
+            });
+        }
+
+        if (cleanCardNumber.length > 19) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Card number is too long. Please check and enter a valid card number (13-19 digits).'
+            });
+        }
+
+        // Basic Luhn algorithm check for card number
+        const luhnCheck = (num) => {
+            let sum = 0;
+            let isEven = false;
+            for (let i = num.length - 1; i >= 0; i--) {
+                let digit = parseInt(num.charAt(i), 10);
+                if (isEven) {
+                    digit *= 2;
+                    if (digit > 9) {
+                        digit -= 9;
+                    }
+                }
+                sum += digit;
+                isEven = !isEven;
+            }
+            return sum % 10 === 0;
+        };
+
+        if (!luhnCheck(cleanCardNumber)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid card number. Please check your card number and try again.'
+            });
+        }
+
+        // Validate card expiry format and date
+        const expiryRegex = /^(\d{4})-(\d{2})$|^(\d{2})\/(\d{2})$/;
+        if (!expiryRegex.test(cardExpiry)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid expiry date format. Please use MM/YY or YYYY-MM format (e.g., 12/25 or 2025-12).'
+            });
+        }
+
+        // Parse and validate expiry date
+        let month, year;
+        if (cardExpiry.includes('-')) {
+            [year, month] = cardExpiry.split('-');
+        } else {
+            [month, year] = cardExpiry.split('/');
+            year = year.length === 2 ? `20${year}` : year;
+        }
+
+        const expiryMonth = parseInt(month, 10);
+        const expiryYear = parseInt(year, 10);
+        const currentDate = new Date();
+        const currentYear = currentDate.getFullYear();
+        const currentMonth = currentDate.getMonth() + 1;
+
+        if (expiryMonth < 1 || expiryMonth > 12) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid expiry month. Please enter a month between 01 and 12.'
+            });
+        }
+
+        if (expiryYear < currentYear || (expiryYear === currentYear && expiryMonth < currentMonth)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Card has expired. Please use a different card or check the expiry date.'
+            });
+        }
+
+        if (expiryYear > currentYear + 20) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid expiry year. Please check the expiry date on your card.'
             });
         }
 
         // Validate CVV
+        if (!/^\d+$/.test(cardCvv)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'CVV can only contain digits. Please enter the security code from your card.'
+            });
+        }
+
         if (cardCvv.length < 3 || cardCvv.length > 4) {
             return res.status(400).json({
                 status: 'error',
-                message: 'Invalid CVV'
+                message: 'Invalid CVV length. Please enter the 3-digit code (or 4-digit for American Express) from your card.'
+            });
+        }
+
+        // Validate cardholder name
+        if (cardholderName.trim().length < 2) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Cardholder name is too short. Please enter the full name as it appears on your card.'
+            });
+        }
+
+        if (cardholderName.trim().length > 50) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Cardholder name is too long. Please enter a name up to 50 characters.'
+            });
+        }
+
+        if (!/^[a-zA-Z\s\-\.\']+$/.test(cardholderName.trim())) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid characters in cardholder name. Please use only letters, spaces, hyphens, and apostrophes.'
             });
         }
 
@@ -297,47 +545,79 @@ const processPayment = async (req, res) => {
             const cvvCode = processorResponse?.cvv_code;
             
             // Map response codes to user-friendly messages
-            const getDeclineReason = (code) => {
+            const getDeclineReason = (code, avsCode, cvvCode) => {
                 const declineCodes = {
-                    '0500': 'Transaction declined by issuing bank',
-                    '0510': 'Invalid card number',
-                    '0520': 'Invalid expiration date',
-                    '0530': 'Invalid CVV code',
-                    '0540': 'Insufficient funds',
-                    '0550': 'Card expired',
-                    '0560': 'Card restricted',
-                    '0570': 'Transaction not permitted',
-                    '0580': 'Invalid merchant',
-                    '0590': 'Transaction amount exceeds limit'
+                    '0500': 'Your card was declined by your bank. Please contact your bank or try a different card.',
+                    '0510': 'The card number you entered is invalid. Please check your card number and try again.',
+                    '0520': 'The expiration date you entered is invalid. Please check your card\'s expiry date.',
+                    '0530': 'The security code (CVV) you entered is incorrect. Please check the 3 or 4 digit code on your card.',
+                    '0540': 'Your card has insufficient funds for this transaction. Please use a different card or contact your bank.',
+                    '0550': 'Your card has expired. Please use a different card.',
+                    '0560': 'Your card is restricted or blocked. Please contact your bank or try a different card.',
+                    '0570': 'This type of transaction is not permitted on your card. Please contact your bank or try a different card.',
+                    '0580': 'There is a temporary issue with payment processing. Please try again later or contact support.',
+                    '0590': 'The transaction amount exceeds your card limit. Please try a smaller amount or contact your bank.',
+                    '0600': 'Your card issuer requires additional verification. Please contact your bank.',
+                    '0700': 'The transaction was flagged for security reasons. Please contact your bank or try again.',
+                    '0800': 'Your card account is closed or inactive. Please use a different card.',
+                    '0900': 'The transaction was declined due to fraud prevention. Please contact your bank.',
+                    '1000': 'Your card has reached its transaction limit for today. Please try again tomorrow or contact your bank.'
                 };
-                return declineCodes[code] || 'Payment declined by card issuer';
+                
+                let baseMessage = declineCodes[code] || 'Your payment was declined by your card issuer. Please contact your bank or try a different card.';
+                
+                // Add specific guidance based on AVS/CVV failures
+                if (avsCode && avsCode !== 'Y') {
+                    baseMessage += ' Additionally, please verify that your billing address matches the address on file with your bank.';
+                }
+                if (cvvCode && cvvCode !== 'M') {
+                    if (!baseMessage.toLowerCase().includes('cvv') && !baseMessage.toLowerCase().includes('security code')) {
+                        baseMessage += ' Please also double-check the security code (CVV) on your card.';
+                    }
+                }
+                
+                return baseMessage;
             };
             
-            const declineReason = getDeclineReason(responseCode);
+            const declineReason = getDeclineReason(responseCode, avsCode, cvvCode);
             
-            // Additional context based on AVS/CVV codes
-            let additionalInfo = '';
-            if (avsCode && avsCode !== 'Y') {
-                additionalInfo += ' Address verification failed.';
-            }
-            if (cvvCode && cvvCode !== 'M') {
-                additionalInfo += ' CVV verification failed.';
+            // Additional helpful information
+            let helpfulTips = '';
+            
+            // Provide tips based on the type of decline
+            if (responseCode === '0540' || responseCode === '0590') {
+                helpfulTips = ' You may want to contact your bank to increase your limits or verify available funds.';
+            } else if (responseCode === '0560' || responseCode === '0570') {
+                helpfulTips = ' Your bank may have temporarily restricted online or international transactions for security.';
+            } else if (responseCode === '0500' || !responseCode) {
+                helpfulTips = ' This is often a temporary issue. You can try again in a few minutes or contact your bank to ensure your card is active for online transactions.';
             }
             
             console.log(`Payment declined for documentId ${documentId}: ${declineReason}`);
             
+            // Create a user-friendly decline message
+            const userMessage = `${declineReason}${helpfulTips}`;
+            
             // Return decline response without updating database
-            return res.status(400).json({
+            return res.status(402).json({
                 status: 'declined',
-                message: 'Payment was declined',
+                message: userMessage,
+                error_type: 'payment_declined',
                 data: {
-                    ...jsonResponse,
                     paymentDetails: paymentDetails,
-                    declineReason: declineReason + additionalInfo,
-                    responseCode: responseCode,
-                    avsCode: avsCode,
-                    cvvCode: cvvCode,
-                    databaseUpdated: false
+                    declineDetails: {
+                        reason: declineReason,
+                        responseCode: responseCode,
+                        avsCode: avsCode,
+                        cvvCode: cvvCode,
+                        helpfulTips: helpfulTips.trim()
+                    },
+                    databaseUpdated: false,
+                    // Include minimal response data for debugging (admin only)
+                    debugInfo: process.env.NODE_ENV === 'development' ? {
+                        paypalOrderId: jsonResponse.id,
+                        paypalStatus: jsonResponse.status
+                    } : null
                 }
             });
         }
@@ -451,10 +731,49 @@ const processPayment = async (req, res) => {
 
     } catch (error) {
         console.error("Failed to process payment:", error);
-        res.status(500).json({
+        
+        // Determine appropriate error message and status code
+        let statusCode = 500;
+        let errorMessage = error.message;
+        let errorType = 'processing_error';
+        
+        // Categorize errors for better user experience
+        if (error.message) {
+            const message = error.message.toLowerCase();
+            
+            if (message.includes('card') || message.includes('cvv') || message.includes('expired')) {
+                statusCode = 400;
+                errorType = 'card_error';
+            } else if (message.includes('declined') || message.includes('insufficient')) {
+                statusCode = 402;
+                errorType = 'payment_declined';
+            } else if (message.includes('network') || message.includes('connection') || message.includes('timeout')) {
+                statusCode = 503;
+                errorType = 'network_error';
+                errorMessage = error.message + ' Please try again in a few moments.';
+            } else if (message.includes('limit') || message.includes('amount')) {
+                statusCode = 400;
+                errorType = 'amount_error';
+            }
+        }
+        
+        // If we don't have a user-friendly message, provide a generic one
+        if (!errorMessage || errorMessage === 'Failed to process payment') {
+            errorMessage = 'We encountered an issue processing your payment. Please try again or contact support if the problem persists.';
+        }
+        
+        res.status(statusCode).json({
             status: 'error',
-            message: 'Failed to process payment',
-            error: error.message
+            message: errorMessage,
+            error_type: errorType,
+            data: {
+                timestamp: new Date().toISOString(),
+                // Include debug info only in development
+                ...(process.env.NODE_ENV === 'development' && { 
+                    debugMessage: error.message,
+                    stack: error.stack 
+                })
+            }
         });
     }
 };
@@ -587,32 +906,39 @@ const processBulkPayments = async (req, res) => {
                     const cvvCode = processorResponse?.cvv_code;
                     
                     // Map response codes to user-friendly messages
-                    const getDeclineReason = (code) => {
+                    // Use the same improved decline reason function as single payment
+                    const getDeclineReason = (code, avsCode, cvvCode) => {
                         const declineCodes = {
-                            '0500': 'Transaction declined by issuing bank',
-                            '0510': 'Invalid card number',
-                            '0520': 'Invalid expiration date',
-                            '0530': 'Invalid CVV code',
-                            '0540': 'Insufficient funds',
-                            '0550': 'Card expired',
-                            '0560': 'Card restricted',
-                            '0570': 'Transaction not permitted',
-                            '0580': 'Invalid merchant',
-                            '0590': 'Transaction amount exceeds limit'
+                            '0500': 'Card was declined by the bank. Contact bank or try different card.',
+                            '0510': 'Invalid card number. Check card number.',
+                            '0520': 'Invalid expiration date. Check card expiry.',
+                            '0530': 'Incorrect security code (CVV). Check CVV.',
+                            '0540': 'Insufficient funds. Use different card or contact bank.',
+                            '0550': 'Card has expired. Use different card.',
+                            '0560': 'Card is restricted. Contact bank or try different card.',
+                            '0570': 'Transaction not permitted. Contact bank.',
+                            '0580': 'Payment processing issue. Try again later.',
+                            '0590': 'Amount exceeds card limit. Try smaller amount or contact bank.',
+                            '0600': 'Additional verification required. Contact bank.',
+                            '0700': 'Flagged for security. Contact bank.',
+                            '0800': 'Card account inactive. Use different card.',
+                            '0900': 'Declined for fraud prevention. Contact bank.',
+                            '1000': 'Daily transaction limit reached. Try tomorrow.'
                         };
-                        return declineCodes[code] || 'Payment declined by card issuer';
+                        
+                        let baseMessage = declineCodes[code] || 'Payment declined by card issuer. Contact bank or try different card.';
+                        
+                        if (avsCode && avsCode !== 'Y') {
+                            baseMessage += ' Verify billing address.';
+                        }
+                        if (cvvCode && cvvCode !== 'M' && !baseMessage.toLowerCase().includes('cvv')) {
+                            baseMessage += ' Double-check CVV.';
+                        }
+                        
+                        return baseMessage;
                     };
                     
-                    const declineReason = getDeclineReason(responseCode);
-                    
-                    // Additional context based on AVS/CVV codes
-                    let additionalInfo = '';
-                    if (avsCode && avsCode !== 'Y') {
-                        additionalInfo += ' Address verification failed.';
-                    }
-                    if (cvvCode && cvvCode !== 'M') {
-                        additionalInfo += ' CVV verification failed.';
-                    }
+                    const declineReason = getDeclineReason(responseCode, avsCode, cvvCode);
                     
                     console.log(`Bulk payment declined for documentId ${row._id}: ${declineReason}`);
                     
@@ -620,11 +946,13 @@ const processBulkPayments = async (req, res) => {
                     return {
                         documentId: row._id,
                         status: 'declined',
-                        declineReason: declineReason + additionalInfo,
-                        responseCode: responseCode,
-                        avsCode: avsCode,
-                        cvvCode: cvvCode,
-                        response: jsonResponse,
+                        message: declineReason,
+                        declineDetails: {
+                            reason: declineReason,
+                            responseCode: responseCode,
+                            avsCode: avsCode,
+                            cvvCode: cvvCode
+                        },
                         databaseUpdated: false
                     };
                 }
@@ -720,25 +1048,149 @@ const processBulkPayments = async (req, res) => {
                     response: jsonResponse
                 };
             } catch (err) {
+                // Provide user-friendly error messages for bulk operations
+                let errorMessage = err.message;
+                let errorType = 'processing_error';
+                
+                if (err.message) {
+                    const message = err.message.toLowerCase();
+                    
+                    if (message.includes('card') || message.includes('cvv') || message.includes('expired')) {
+                        errorType = 'card_error';
+                    } else if (message.includes('declined') || message.includes('insufficient')) {
+                        errorType = 'payment_declined';
+                    } else if (message.includes('network') || message.includes('connection') || message.includes('timeout')) {
+                        errorType = 'network_error';
+                        errorMessage = 'Network connection issue. Will retry automatically.';
+                    } else if (message.includes('limit') || message.includes('amount')) {
+                        errorType = 'amount_error';
+                    }
+                }
+                
+                // Provide generic message if original is not user-friendly
+                if (!errorMessage || errorMessage.length > 200) {
+                    errorMessage = 'Payment processing failed for this transaction.';
+                }
+                
                 return {
                     documentId: row._id,
                     status: 'error',
-                    error: err.message,
-                    stack: err.stack
+                    message: errorMessage,
+                    error_type: errorType,
+                    timestamp: new Date().toISOString(),
+                    // Include debug info only in development
+                    ...(process.env.NODE_ENV === 'development' && { 
+                        debugMessage: err.message,
+                        stack: err.stack 
+                    })
                 };
             }
         })));
-        // Add summary stats
+        // Add comprehensive summary stats
+        const successCount = results.filter(r => r.status === 'success').length;
+        const errorCount = results.filter(r => r.status === 'error').length;
+        const declinedCount = results.filter(r => r.status === 'declined').length;
+        const totalCount = results.length;
+        
+        // Calculate percentages
+        const successRate = totalCount > 0 ? Math.round((successCount / totalCount) * 100) : 0;
+        const failureRate = totalCount > 0 ? Math.round(((errorCount + declinedCount) / totalCount) * 100) : 0;
+        
+        // Calculate total amounts
+        const successfulAmount = results
+            .filter(r => r.status === 'success')
+            .reduce((sum, r) => {
+                const amount = parseFloat(r.response?.purchase_units?.[0]?.amount?.value || 0);
+                return sum + amount;
+            }, 0);
+            
+        const failedAmount = results
+            .filter(r => r.status !== 'success')
+            .reduce((sum, r) => {
+                // Try to get original amount from document if available
+                return sum + 0; // We'll need to add this if we want failed amounts
+            }, 0);
+        
+        // Create user-friendly summary
         const summary = {
-            total: results.length,
-            success: results.filter(r => r.status === 'success').length,
-            error: results.filter(r => r.status === 'error').length,
-            declined: results.filter(r => r.status === 'declined').length
+            // Main counts
+            total_transactions: totalCount,
+            successful_payments: successCount,
+            failed_payments: errorCount + declinedCount,
+            
+            // Breakdown of failures
+            payment_errors: errorCount,
+            payment_declines: declinedCount,
+            
+            // Success rate
+            success_rate_percentage: successRate,
+            failure_rate_percentage: failureRate,
+            
+            // Financial summary
+            total_amount_processed: successfulAmount.toFixed(2),
+            currency: results.find(r => r.status === 'success')?.response?.purchase_units?.[0]?.amount?.currency_code || 'USD',
+            
+            // User-friendly message
+            summary_message: `${successCount} of ${totalCount} payments completed successfully (${successRate}%). ` +
+                           `${errorCount + declinedCount} payments failed${declinedCount > 0 ? ` (${declinedCount} declined, ${errorCount} errors)` : ''}.`,
+            
+            // Processing details
+            processing_time: new Date().toISOString(),
+            
+            // Legacy format for backwards compatibility
+            total: totalCount,
+            success: successCount,
+            error: errorCount,
+            declined: declinedCount
         };
-        res.status(200).json({ status: 'success', summary, results });
+        
+        // Determine overall response status
+        const overallStatus = successCount === totalCount ? 'all_success' : 
+                            successCount === 0 ? 'all_failed' : 'partial_success';
+        
+        res.status(200).json({ 
+            status: overallStatus,
+            message: summary.summary_message,
+            summary, 
+            results 
+        });
     } catch (error) {
         console.error('Bulk PayPal payment error:', error);
-        res.status(500).json({ status: 'error', message: 'Bulk payment failed', error: error.message });
+        
+        // Determine appropriate error message for bulk operation
+        let errorMessage = 'Bulk payment processing failed';
+        let statusCode = 500;
+        
+        if (error.message) {
+            const message = error.message.toLowerCase();
+            
+            if (message.includes('documentids') || message.includes('array')) {
+                statusCode = 400;
+                errorMessage = 'Invalid document IDs provided. Please check the request format.';
+            } else if (message.includes('network') || message.includes('connection') || message.includes('timeout')) {
+                statusCode = 503;
+                errorMessage = 'Network connection issue during bulk processing. Please try again.';
+            } else if (message.includes('database') || message.includes('mongo')) {
+                statusCode = 503;
+                errorMessage = 'Database connection issue. Please try again later.';
+            } else if (error.message.length < 200) {
+                errorMessage = `Bulk payment failed: ${error.message}`;
+            }
+        }
+        
+        res.status(statusCode).json({ 
+            status: 'error', 
+            message: errorMessage,
+            error_type: 'bulk_processing_error',
+            data: {
+                timestamp: new Date().toISOString(),
+                // Include debug info only in development
+                ...(process.env.NODE_ENV === 'development' && { 
+                    debugMessage: error.message,
+                    stack: error.stack 
+                })
+            }
+        });
     }
 };
 
@@ -1134,20 +1586,57 @@ const processBulkRefunds = async (req, res) => {
             }
         })));
 
-        // Add summary stats
+        // Add comprehensive summary stats for refunds
+        const successCount = results.filter(r => r.status === 'success').length;
+        const errorCount = results.filter(r => r.status === 'error').length;
+        const totalCount = results.length;
+        
+        // Calculate percentages
+        const successRate = totalCount > 0 ? Math.round((successCount / totalCount) * 100) : 0;
+        const failureRate = totalCount > 0 ? Math.round((errorCount / totalCount) * 100) : 0;
+        
+        // Calculate total refund amounts
+        const totalRefundAmount = results
+            .filter(r => r.status === 'success')
+            .reduce((sum, r) => sum + parseFloat(r.refund?.amount || 0), 0);
+            
+        // Create user-friendly summary
         const summary = {
-            total: results.length,
-            success: results.filter(r => r.status === 'success').length,
-            error: results.filter(r => r.status === 'error').length,
-            refundType: refundType,
-            totalRefundAmount: results
-                .filter(r => r.status === 'success')
-                .reduce((sum, r) => sum + parseFloat(r.refund?.amount || 0), 0)
+            // Main counts
+            total_refund_requests: totalCount,
+            successful_refunds: successCount,
+            failed_refunds: errorCount,
+            
+            // Success rate
+            success_rate_percentage: successRate,
+            failure_rate_percentage: failureRate,
+            
+            // Refund details
+            refund_type: refundType,
+            total_refunded_amount: totalRefundAmount.toFixed(2),
+            currency: results.find(r => r.status === 'success')?.refund?.currency || 'USD',
+            
+            // User-friendly message
+            summary_message: `${successCount} of ${totalCount} refunds completed successfully (${successRate}%). ` +
+                           `${errorCount} refunds failed. Total refunded: $${totalRefundAmount.toFixed(2)}.`,
+            
+            // Processing details
+            processing_time: new Date().toISOString(),
+            
+            // Legacy format for backwards compatibility
+            total: totalCount,
+            success: successCount,
+            error: errorCount,
+            totalRefundAmount: totalRefundAmount
         };
+        
+        // Determine overall response status
+        const overallStatus = successCount === totalCount ? 'all_success' : 
+                            successCount === 0 ? 'all_failed' : 'partial_success';
 
         res.status(200).json({ 
-            status: 'success', 
-            message: 'Bulk refunds processed',
+            status: overallStatus,
+            message: summary.summary_message,
             summary, 
             results 
         });
