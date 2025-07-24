@@ -208,12 +208,15 @@ const uploadFile = async (req, res) => {
                             // YYYY-MM
                             if (/^\d{4}-\d{2}$/.test(cardExpire)) {
                                 // already correct
-                            } else if ((match = cardExpire.match(/^(\d{2})[\/-](\d{4})$/))) {
-                                // MM-YYYY or MM/YYYY
-                                cardExpire = `${match[2]}-${match[1]}`;
-                            } else if ((match = cardExpire.match(/^(\d{4})[\/-](\d{2})$/))) {
-                                // YYYY/MM or YYYY-MM
-                                cardExpire = `${match[1]}-${match[2]}`;
+                            } else if ((match = cardExpire.match(/^(\d{1,2})[\/-](\d{4})$/))) {
+                                // M/YYYY or MM/YYYY or M-YYYY or MM-YYYY
+                                cardExpire = `${match[2]}-${match[1].padStart(2, '0')}`;
+                            } else if ((match = cardExpire.match(/^(\d{4})[\/-](\d{1,2})$/))) {
+                                // YYYY/M or YYYY/MM or YYYY-M or YYYY-MM
+                                cardExpire = `${match[1]}-${match[2].padStart(2, '0')}`;
+                            } else if ((match = cardExpire.match(/^(\d{1,2})[\/-](\d{2})$/))) {
+                                // M/YY or MM/YY or M-YY or MM-YY
+                                cardExpire = `20${match[2]}-${match[1].padStart(2, '0')}`;
                             } else if ((match = cardExpire.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/))) {
                                 // DD-MM-YYYY or DD/MM/YYYY
                                 cardExpire = `${match[3]}-${match[2]}`;
@@ -919,12 +922,15 @@ const resumeUpload = async (req, res) => {
                             // YYYY-MM
                             if (/^\d{4}-\d{2}$/.test(cardExpire)) {
                                 // already correct
-                            } else if ((match = cardExpire.match(/^(\d{2})[\/-](\d{4})$/))) {
-                                // MM-YYYY or MM/YYYY
-                                cardExpire = `${match[2]}-${match[1]}`;
-                            } else if ((match = cardExpire.match(/^(\d{4})[\/-](\d{2})$/))) {
-                                // YYYY/MM or YYYY-MM
-                                cardExpire = `${match[1]}-${match[2]}`;
+                            } else if ((match = cardExpire.match(/^(\d{1,2})[\/-](\d{4})$/))) {
+                                // M/YYYY or MM/YYYY or M-YYYY or MM-YYYY
+                                cardExpire = `${match[2]}-${match[1].padStart(2, '0')}`;
+                            } else if ((match = cardExpire.match(/^(\d{4})[\/-](\d{1,2})$/))) {
+                                // YYYY/M or YYYY/MM or YYYY-M or YYYY-MM
+                                cardExpire = `${match[1]}-${match[2].padStart(2, '0')}`;
+                            } else if ((match = cardExpire.match(/^(\d{1,2})[\/-](\d{2})$/))) {
+                                // M/YY or MM/YY or M-YY or MM-YY
+                                cardExpire = `20${match[2]}-${match[1].padStart(2, '0')}`;
                             } else if ((match = cardExpire.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/))) {
                                 // DD-MM-YYYY or DD/MM/YYYY
                                 cardExpire = `${match[3]}-${match[2]}`;

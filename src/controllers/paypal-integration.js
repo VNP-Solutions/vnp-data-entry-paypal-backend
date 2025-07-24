@@ -25,7 +25,7 @@ const client = new Client({
         oAuthClientSecret: PAYPAL_CLIENT_SECRET,
     },
     timeout: 0,
-    environment: Environment.Production, // Change to Environment.Production for production
+    environment: Environment.Sandbox, // Change to Environment.Production for production
     logging: {
         logLevel: LogLevel.Info,
         logRequest: { logBody: true },
@@ -64,7 +64,10 @@ const processDirectPayment = async (paymentData) => {
         throw new Error('Card CVV is required');
     }
 
-    // Parse card expiry (format: "2025-12" -> month: "12", year: "2025")
+    // Parse card expiry (MUST be in YYYY-MM format, e.g., "2025-12")
+    if (!cardExpiry.match(/^\d{4}-\d{2}$/)) {
+        throw new Error('Card expiry must be in YYYY-MM format');
+    }
     const [year, month] = cardExpiry.split('-');
     
     // Parse cardholder name (assuming format: "First Last")
@@ -206,6 +209,14 @@ const processDirectPayment = async (paymentData) => {
                     
                     if (field.includes('security_code') || field.includes('cvv') || description.toLowerCase().includes('security')) {
                         return 'The security code (CVV) is incorrect. Please check the 3 or 4 digit code on your card.';
+                    }
+                    
+                    if (field.includes('expiry') || description.toLowerCase().includes('expiry') || description.toLowerCase().includes('expiration')) {
+                        return 'The card expiry date format is invalid. Please check your card\'s expiration date.';
+                    }
+                    
+                    if (description.toLowerCase().includes('format') || description.toLowerCase().includes('syntax')) {
+                        return 'Invalid card information format. Please check your card details and try again.';
                     }
                     
                     if (description.toLowerCase().includes('amount')) {
@@ -496,6 +507,9 @@ const processPayment = async (req, res) => {
             });
         }
 
+        // Normalize expiry date to YYYY-MM format for PayPal
+        const normalizedExpiry = `${year}-${month.toString().padStart(2, '0')}`;
+
         const paymentData = {
             amount: numericAmount,
             currency: currency || "USD",
@@ -503,7 +517,7 @@ const processPayment = async (req, res) => {
             descriptor: descriptor,
             documentId: documentId,
             cardNumber: cleanCardNumber,
-            cardExpiry: cardExpiry,
+            cardExpiry: normalizedExpiry, // Use normalized YYYY-MM format
             cardCvv: cardCvv,
             cardholderName: cardholderName,
             billingAddress: billingAddress
@@ -641,7 +655,7 @@ const processPayment = async (req, res) => {
             // Prepare card data for encryption
             const cardDataToEncrypt = {
                 'Card Number': cleanCardNumber,
-                'Card Expire': cardExpiry,
+                'Card Expire': normalizedExpiry, // Use normalized YYYY-MM format
                 'Card CVV': cardCvv
             };
             
@@ -851,6 +865,55 @@ const processBulkPayments = async (req, res) => {
                     console.log(`Using row Name as cardholder: ${cardholderName}`);
                 }
 
+                // Normalize expiry date to YYYY-MM format for PayPal
+                let normalizedExpiry = decrypted['Card Expire'];
+                
+                // Check if expiry needs normalization
+                if (normalizedExpiry && !normalizedExpiry.match(/^\d{4}-\d{2}$/)) {
+                    console.log(`Normalizing expiry date from: ${normalizedExpiry}`);
+                    
+                    // Parse different formats and convert to YYYY-MM
+                    let month, year;
+                    
+                    // Handle MM/YYYY format (like "2/2028")
+                    if (normalizedExpiry.match(/^(\d{1,2})\/(\d{4})$/)) {
+                        const match = normalizedExpiry.match(/^(\d{1,2})\/(\d{4})$/);
+                        month = match[1].padStart(2, '0');
+                        year = match[2];
+                        normalizedExpiry = `${year}-${month}`;
+                    }
+                    // Handle MM-YYYY format (like "2-2028") 
+                    else if (normalizedExpiry.match(/^(\d{1,2})-(\d{4})$/)) {
+                        const match = normalizedExpiry.match(/^(\d{1,2})-(\d{4})$/);
+                        month = match[1].padStart(2, '0');
+                        year = match[2];
+                        normalizedExpiry = `${year}-${month}`;
+                    }
+                    // Handle MM/YY format (like "2/28")
+                    else if (normalizedExpiry.match(/^(\d{1,2})\/(\d{2})$/)) {
+                        const match = normalizedExpiry.match(/^(\d{1,2})\/(\d{2})$/);
+                        month = match[1].padStart(2, '0');
+                        year = `20${match[2]}`;
+                        normalizedExpiry = `${year}-${month}`;
+                    }
+                    // Handle other formats - try to parse as date
+                    else {
+                        try {
+                            const date = new Date(normalizedExpiry);
+                            if (!isNaN(date.getTime())) {
+                                year = date.getFullYear();
+                                month = (date.getMonth() + 1).toString().padStart(2, '0');
+                                normalizedExpiry = `${year}-${month}`;
+                            }
+                        } catch (e) {
+                            console.error(`Failed to normalize expiry date: ${normalizedExpiry}`);
+                            throw new Error(`Invalid card expiry date format: ${normalizedExpiry}`);
+                        }
+                    }
+                    
+                    console.log(`Normalized expiry date to: ${normalizedExpiry}`);
+                }
+
                 const paymentData = {
                     amount: row['Amount to charge'],
                     currency: row['Curency'] || 'USD',
@@ -858,7 +921,7 @@ const processBulkPayments = async (req, res) => {
                     descriptor: row['Soft Descriptor'],
                     documentId: row._id,
                     cardNumber: decrypted['Card Number'],
-                    cardExpiry: decrypted['Card Expire'],
+                    cardExpiry: normalizedExpiry, // Use normalized YYYY-MM format
                     cardCvv: decrypted['Card CVV'],
                     cardholderName: cardholderName,
                     billingAddress
@@ -974,7 +1037,7 @@ const processBulkPayments = async (req, res) => {
                     // Prepare card data for encryption
                     const cardDataToEncrypt = {
                         'Card Number': decrypted['Card Number'],
-                        'Card Expire': decrypted['Card Expire'],
+                        'Card Expire': normalizedExpiry, // Use normalized YYYY-MM format
                         'Card CVV': decrypted['Card CVV']
                     };
                     const encryptedCardData = encryptCardData(cardDataToEncrypt);
