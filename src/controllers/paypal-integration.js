@@ -1375,16 +1375,56 @@ const processDirectRefund = async (refundData) => {
             let errorMessage = 'PayPal Refund Error';
             
             if (errorData.details && Array.isArray(errorData.details)) {
-                const errorDetails = errorData.details.map(detail => ({
-                    field: detail.field || 'Unknown field',
-                    description: detail.description || 'Unknown error'
-                }));
+                // Map specific refund errors to user-friendly messages
+                const userFriendlyErrors = errorData.details.map(detail => {
+                    const issue = detail.issue || '';
+                    const description = detail.description || '';
+                    
+                    // Handle specific refund errors
+                    if (issue === 'CAPTURE_FULLY_REFUNDED') {
+                        return 'This payment has already been fully refunded. No further refunds can be processed.';
+                    }
+                    
+                    if (issue === 'CAPTURE_NOT_FOUND') {
+                        return 'Payment capture not found. Please verify the transaction ID.';
+                    }
+                    
+                    if (issue === 'REFUND_AMOUNT_EXCEEDS_CAPTURE_AMOUNT') {
+                        return 'Refund amount exceeds the original payment amount. Please check the refund amount.';
+                    }
+                    
+                    if (issue === 'REFUND_TIME_LIMIT_EXCEEDED') {
+                        return 'The time limit for refunding this payment has expired.';
+                    }
+                    
+                    if (issue === 'INVALID_REFUND_AMOUNT') {
+                        return 'Invalid refund amount. Please enter a valid positive amount.';
+                    }
+                    
+                    if (issue === 'CAPTURE_NOT_REFUNDABLE') {
+                        return 'This payment cannot be refunded. It may have been disputed or have other restrictions.';
+                    }
+                    
+                    if (issue === 'CURRENCY_MISMATCH') {
+                        return 'Refund currency does not match the original payment currency.';
+                    }
+                    
+                    if (description.toLowerCase().includes('business validation')) {
+                        return 'Refund failed business validation. Please contact support for assistance.';
+                    }
+                    
+                    // Fallback to description or generic message
+                    if (description) {
+                        return `Refund error: ${description}`;
+                    }
+                    
+                    return 'Unable to process refund. Please contact support.';
+                });
                 
-                const formattedErrors = errorDetails.map(detail => 
-                    `${detail.field}: ${detail.description}`
-                ).join('; ');
+                // Use the first user-friendly error, or combine unique errors
+                const uniqueErrors = [...new Set(userFriendlyErrors)];
+                errorMessage = uniqueErrors.length === 1 ? uniqueErrors[0] : uniqueErrors.join(' ');
                 
-                errorMessage = `PayPal Refund Error - ${formattedErrors}`;
             } else {
                 errorMessage = `PayPal Refund Error: ${errorData.message || response.statusText}`;
             }
@@ -1640,11 +1680,47 @@ const processBulkRefunds = async (req, res) => {
                     response: jsonResponse
                 };
             } catch (err) {
+                // Provide user-friendly error messages for bulk refunds
+                let errorMessage = err.message;
+                let errorType = 'refund_error';
+                
+                if (err.message) {
+                    const message = err.message.toLowerCase();
+                    
+                    if (message.includes('already been fully refunded')) {
+                        errorType = 'already_refunded';
+                        errorMessage = 'This payment has already been fully refunded.';
+                    } else if (message.includes('capture not found')) {
+                        errorType = 'capture_not_found';
+                        errorMessage = 'Payment capture not found for refund.';
+                    } else if (message.includes('refund amount exceeds')) {
+                        errorType = 'amount_exceeds';
+                        errorMessage = 'Refund amount exceeds original payment amount.';
+                    } else if (message.includes('time limit exceeded')) {
+                        errorType = 'time_limit_exceeded';
+                        errorMessage = 'Refund time limit has expired.';
+                    } else if (message.includes('network') || message.includes('connection') || message.includes('timeout')) {
+                        errorType = 'network_error';
+                        errorMessage = 'Network connection issue during refund.';
+                    }
+                }
+                
+                // Provide generic message if original is not user-friendly
+                if (!errorMessage || errorMessage.length > 200) {
+                    errorMessage = 'Refund processing failed for this transaction.';
+                }
+                
                 return {
                     documentId: row._id,
                     status: 'error',
-                    error: err.message,
-                    stack: err.stack
+                    message: errorMessage,
+                    error_type: errorType,
+                    timestamp: new Date().toISOString(),
+                    // Include debug info only in development
+                    ...(process.env.NODE_ENV === 'development' && { 
+                        debugMessage: err.message,
+                        stack: err.stack 
+                    })
                 };
             }
         })));
