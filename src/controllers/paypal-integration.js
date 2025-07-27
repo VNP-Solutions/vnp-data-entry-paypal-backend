@@ -1,10 +1,4 @@
-const {
-    ApiError,
-    Client,
-    Environment,
-    LogLevel,
-    OrdersController,
-} = require("@paypal/paypal-server-sdk");
+const fetch = globalThis.fetch || require('node-fetch');
 const ExcelData = require('../models/ExcelData');
 const OTA = require('../models/OTA');
 const { encryptCardData, decryptCardData } = require('../utils/encryption');
@@ -18,22 +12,13 @@ const {
 // PayPal Partner Attribution ID (BN Code) - Replace with your actual BN code
 const PAYPAL_BN_CODE = process.env.PAYPAL_BN_CODE || 'VNPSolutionsMOR_SP';
 
-// Initialize PayPal client
-const client = new Client({
-    clientCredentialsAuthCredentials: {
-        oAuthClientId: PAYPAL_CLIENT_ID,
-        oAuthClientSecret: PAYPAL_CLIENT_SECRET,
-    },
-    timeout: 0,
-    environment: Environment.Production, // Change to Environment.Production for production
-    logging: {
-        logLevel: LogLevel.Info,
-        logRequest: { logBody: true },
-        logResponse: { logHeaders: true },
-    },
-});
-
-const ordersController = new OrdersController(client);
+// PayPal API Configuration
+console.log('=== PayPal Configuration ===');
+console.log('Environment:', process.env.NODE_ENV === 'production' ? 'PRODUCTION' : 'SANDBOX');
+console.log('BN Code:', PAYPAL_BN_CODE);
+console.log('Client ID (last 10 chars):', PAYPAL_CLIENT_ID ? '...' + PAYPAL_CLIENT_ID.slice(-10) : 'NOT SET');
+console.log('Client Secret configured:', !!PAYPAL_CLIENT_SECRET);
+console.log('=============================');
 
 /**
  * Process direct payment with card information using PayPal v2 API
@@ -87,88 +72,168 @@ const processDirectPayment = async (paymentData) => {
 
     const requestBody = {
         intent: "CAPTURE",
-        purchaseUnits: [
+        purchase_units: [
             {
                 amount: {
-                    currencyCode: currency,
+                    currency_code: currency,
                     value: amount.toString(),
                     breakdown: {
-                        itemTotal: {
-                            currencyCode: currency,
+                        item_total: {
+                            currency_code: currency,
                             value: amount.toString()
                         }
                     }
                 },
                 description: description,
-                customId: documentId ? documentId.toString() : undefined,
+                custom_id: documentId ? documentId.toString() : undefined,
                 items: [
                     {
                         name: description || "Payment for services",
                         description: `Payment processing for ${cardholderName || 'customer'}`,
                         quantity: "1",
-                        unitAmount: {
-                            currencyCode: currency,
+                        unit_amount: {
+                            currency_code: currency,
                             value: amount.toString()
                         },
                         category: "DIGITAL_GOODS"
                     }
                 ],
                 ...(descriptor && {
-                    softDescriptor: descriptor
+                    soft_descriptor: descriptor
                 })
             }
         ]
     };
 
     try {
-        // Create the order without payment source first
-        const { body: orderBody, ...orderHttpResponse } = await ordersController.createOrder({
-            body: requestBody,
-            prefer: "return=representation",
-            payPalPartnerAttributionId: PAYPAL_BN_CODE,
-            payPalRequestId: `order-${documentId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        // Get access token using the same method as refund function
+        const clientId = PAYPAL_CLIENT_ID.trim();
+        const clientSecret = PAYPAL_CLIENT_SECRET.trim();
+        const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+        
+        // Use environment-based URL configuration
+        const baseURL = process.env.NODE_ENV === 'production' 
+            ? 'https://api-m.paypal.com'           // Production
+            : 'https://api-m.sandbox.paypal.com'; // Sandbox
+        
+        console.log('Using PayPal base URL:', baseURL);
+        
+        // First get access token
+        const tokenResponse = await fetch(`${baseURL}/v1/oauth2/token`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'grant_type=client_credentials'
         });
         
-        const orderResponse = JSON.parse(orderBody);
+        if (!tokenResponse.ok) {
+            const tokenError = await tokenResponse.text();
+            console.error('Token response status:', tokenResponse.status);
+            console.error('Token response error:', tokenError);
+            throw new Error(`Failed to get PayPal access token: ${tokenResponse.status} ${tokenResponse.statusText}`);
+        }
         
-        // Now capture the payment with card details
+        const tokenData = await tokenResponse.json();
+        const accessToken = tokenData.access_token;
+        
+        if (!accessToken) {
+            throw new Error('No access token received from PayPal');
+        }
+        
+        console.log('Successfully obtained PayPal access token');
+        
+        // Step 1: Create the order using direct API
+        const createOrderEndpoint = `${baseURL}/v2/checkout/orders`;
+        const orderRequestId = `order-${documentId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        console.log('Create Order endpoint:', createOrderEndpoint);
+        console.log('Create Order request body:', JSON.stringify(requestBody, null, 2));
+
+        const orderResponse = await fetch(createOrderEndpoint, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+                'PayPal-Partner-Attribution-Id': PAYPAL_BN_CODE,
+                'PayPal-Request-Id': orderRequestId,
+                'Prefer': 'return=representation'
+            },
+            body: JSON.stringify(requestBody)
+        });
+
+        if (!orderResponse.ok) {
+            const orderError = await orderResponse.json();
+            console.error('PayPal Create Order API Error Status:', orderResponse.status);
+            console.error('PayPal Create Order API Error:', orderError);
+            throw new Error(`Failed to create PayPal order: ${orderResponse.status} ${orderResponse.statusText}`);
+        }
+        
+        const orderData = await orderResponse.json();
+        console.log('Order created successfully:', orderData.id);
+        
+        // Step 2: Capture the payment with card details using direct API
         const captureRequest = {
-            paymentSource: {
+            payment_source: {
                 card: {
                     number: cardNumber.replace(/\s/g, ''),
                     expiry: cardExpiry,
-                    securityCode: cardCvv,
+                    security_code: cardCvv,
                     name: cardholderName,
-                    billingAddress: {
-                        addressLine1: billingAddress?.address_line_1 || billingAddress?.addressLine1 || '',
-                        addressLine2: billingAddress?.address_line_2 || billingAddress?.addressLine2 || '',
-                        adminArea2: billingAddress?.admin_area_2 || billingAddress?.adminArea2 || billingAddress?.city || '',
-                        adminArea1: billingAddress?.admin_area_1 || billingAddress?.adminArea1 || billingAddress?.state || '',
-                        postalCode: billingAddress?.postal_code || billingAddress?.postalCode || billingAddress?.zipCode || '',
-                        countryCode: billingAddress?.country_code || billingAddress?.countryCode || 'US'
+                    billing_address: {
+                        address_line_1: billingAddress?.address_line_1 || billingAddress?.addressLine1 || '',
+                        address_line_2: billingAddress?.address_line_2 || billingAddress?.addressLine2 || '',
+                        admin_area_2: billingAddress?.admin_area_2 || billingAddress?.adminArea2 || billingAddress?.city || '',
+                        admin_area_1: billingAddress?.admin_area_1 || billingAddress?.adminArea1 || billingAddress?.state || '',
+                        postal_code: billingAddress?.postal_code || billingAddress?.postalCode || billingAddress?.zipCode || '',
+                        country_code: billingAddress?.country_code || billingAddress?.countryCode || 'US'
                     }
                 }
             }
         };
         
-        const { body: captureBody, ...captureHttpResponse } = await ordersController.captureOrder({
-            id: orderResponse.id,
-            body: captureRequest,
-            prefer: "return=representation",
-            payPalPartnerAttributionId: PAYPAL_BN_CODE,
-            payPalRequestId: `capture-${orderResponse.id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-        });
+        const captureOrderEndpoint = `${baseURL}/v2/checkout/orders/${orderData.id}/capture`;
+        const captureRequestId = `capture-${orderData.id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         
-        const captureResponse = JSON.parse(captureBody);
+        console.log('Capture Order endpoint:', captureOrderEndpoint);
+        console.log('Capture Order request body:', JSON.stringify(captureRequest, null, 2));
+
+        const captureResponse = await fetch(captureOrderEndpoint, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+                'PayPal-Partner-Attribution-Id': PAYPAL_BN_CODE,
+                'PayPal-Request-Id': captureRequestId,
+                'Prefer': 'return=representation'
+            },
+            body: JSON.stringify(captureRequest)
+        });
+
+        if (!captureResponse.ok) {
+            const captureError = await captureResponse.json();
+            console.error('PayPal Capture Order API Error Status:', captureResponse.status);
+            console.error('PayPal Capture Order API Error:', captureError);
+            throw new Error(`Failed to capture PayPal order: ${captureResponse.status} ${captureResponse.statusText}`);
+        }
+        
+        const captureData = await captureResponse.json();
+        console.log('Payment captured successfully:', captureData.id);
         
         return {
-            jsonResponse: captureResponse,
-            httpStatusCode: captureHttpResponse.statusCode,
+            jsonResponse: captureData,
+            httpStatusCode: captureResponse.status,
         };
     } catch (error) {
-        if (error instanceof ApiError) {
-            console.error('PayPal API Error:', error.message);
-            console.error('PayPal Error Details:', error.result);
+        console.error('PayPal Payment Error:', error.message);
+        
+        // Handle direct API errors (fetch errors)
+        if (error.message && (
+            error.message.includes('Failed to create PayPal order') || 
+            error.message.includes('Failed to capture PayPal order') ||
+            error.message.includes('Failed to get PayPal access token')
+        )) {
             
             // Extract field and description from error details
             let errorMessage = 'Payment processing failed';

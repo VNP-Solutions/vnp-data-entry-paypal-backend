@@ -25,6 +25,7 @@
     "mongoose": "^8.16.0",
     "multer": "^2.0.0-rc.3",
     "multer-s3": "^3.0.1",
+    "node-fetch": "^3.3.2",
     "nodemailer": "^6.9.7",
     "p-limit": "^2.3.0",
     "stripe": "^18.3.0",
