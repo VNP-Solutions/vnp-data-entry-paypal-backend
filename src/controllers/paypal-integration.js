@@ -181,14 +181,14 @@ const processDirectPayment = async (paymentData) => {
                     expiry: cardExpiry,
                     security_code: cardCvv,
                     name: cardholderName,
-                    billing_address: {
-                        address_line_1: billingAddress?.address_line_1 || billingAddress?.addressLine1 || '',
-                        address_line_2: billingAddress?.address_line_2 || billingAddress?.addressLine2 || '',
-                        admin_area_2: billingAddress?.admin_area_2 || billingAddress?.adminArea2 || billingAddress?.city || '',
-                        admin_area_1: billingAddress?.admin_area_1 || billingAddress?.adminArea1 || billingAddress?.state || '',
-                        postal_code: billingAddress?.postal_code || billingAddress?.postalCode || billingAddress?.zipCode || '',
-                        country_code: billingAddress?.country_code || billingAddress?.countryCode || 'US'
-                    }
+                                         billing_address: {
+                         address_line_1: billingAddress?.address_line_1 || billingAddress?.addressLine1 || '',
+                         address_line_2: billingAddress?.address_line_2 || billingAddress?.addressLine2 || '',
+                         admin_area_2: billingAddress?.admin_area_2 || billingAddress?.adminArea2 || billingAddress?.city || '',
+                         admin_area_1: billingAddress?.admin_area_1 || billingAddress?.adminArea1 || billingAddress?.state || '',
+                         postal_code: billingAddress?.postal_code || billingAddress?.postalCode || billingAddress?.zipCode || '',
+                         country_code: billingAddress?.country_code || billingAddress?.countryCode || 'US'
+                     }
                 }
             }
         };
@@ -198,6 +198,11 @@ const processDirectPayment = async (paymentData) => {
         
         console.log('Capture Order endpoint:', captureOrderEndpoint);
         console.log('Capture Order request body:', JSON.stringify(captureRequest, null, 2));
+        
+        // Debug: Specifically check postal_code
+        console.log('Debug - Postal Code Check:');
+        console.log('- Billing Address Object:', billingAddress);
+        console.log('- Final postal_code being sent:', captureRequest.payment_source.card.billing_address.postal_code);
 
         const captureResponse = await fetch(captureOrderEndpoint, {
             method: 'POST',
@@ -575,6 +580,23 @@ const processPayment = async (req, res) => {
         // Normalize expiry date to YYYY-MM format for PayPal
         const normalizedExpiry = `${year}-${month.toString().padStart(2, '0')}`;
 
+        // Construct billing address object from request body
+        // Handle both nested billingAddress object and flat structure
+        const constructedBillingAddress = {
+            address_line_1: billingAddress?.address_line_1 || billingAddress?.addressLine1 || req.body.addressLine1 || '',
+            address_line_2: billingAddress?.address_line_2 || billingAddress?.addressLine2 || req.body.addressLine2 || '',
+            admin_area_2: billingAddress?.admin_area_2 || billingAddress?.city || req.body.city || '',
+            admin_area_1: billingAddress?.admin_area_1 || billingAddress?.state || req.body.state || '',
+            postal_code: billingAddress?.postal_code || billingAddress?.zipCode || req.body.zipCode || req.body.postalCode || '',
+            country_code: billingAddress?.country_code || billingAddress?.countryCode || req.body.countryCode || 'US'
+        };
+
+        // Debug log to verify billing address construction
+        console.log('Billing address construction:');
+        console.log('- Input zipCode:', req.body.zipCode);
+        console.log('- Input billingAddress:', billingAddress);
+        console.log('- Constructed:', constructedBillingAddress);
+
         const paymentData = {
             amount: numericAmount,
             currency: currency || "USD",
@@ -585,7 +607,7 @@ const processPayment = async (req, res) => {
             cardExpiry: normalizedExpiry, // Use normalized YYYY-MM format
             cardCvv: cardCvv,
             cardholderName: cardholderName,
-            billingAddress: billingAddress
+            billingAddress: constructedBillingAddress
         };
 
 
