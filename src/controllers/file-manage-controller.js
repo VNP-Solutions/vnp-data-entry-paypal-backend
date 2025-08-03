@@ -372,7 +372,7 @@ const uploadFile = async (req, res) => {
     }
 };
 
-// Get all row data for a user
+// Get all row data from all users
 const getRowData = async (req, res) => {
     try {
         const { limit = 10, page = 1, chargeStatus, search } = req.query;
@@ -380,8 +380,8 @@ const getRowData = async (req, res) => {
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // Build query object
-        const query = { userId: userId };
+        // Build query object - show data from all users
+        const query = {};
 
 
         // Add filter for Charge status if provided (skip if "All" is selected)
