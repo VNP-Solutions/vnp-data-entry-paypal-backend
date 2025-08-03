@@ -661,6 +661,101 @@ const deleteFile = async (req, res) => {
     }
 };
 
+// Delete entire upload and all associated data
+const deleteUploadById = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    
+    try {
+        const { uploadId } = req.params;
+        const userId = req.user.userId;
+
+        if (!uploadId) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Upload ID is required'
+            });
+        }
+
+        // First, verify that the upload session belongs to the user
+        const uploadSession = await UploadSession.findOne({
+            uploadId: uploadId,
+            userId: userId
+        });
+
+        if (!uploadSession) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Upload session not found or access denied'
+            });
+        }
+
+        // Count how many records will be deleted for confirmation
+        const recordCount = await ExcelData.countDocuments({
+            uploadId: uploadId,
+            userId: userId
+        });
+
+        // Delete all ExcelData records for this upload
+        const excelDataDeleteResult = await ExcelData.deleteMany({
+            uploadId: uploadId,
+            userId: userId
+        }, { session });
+
+        // Delete the upload session
+        const sessionDeleteResult = await UploadSession.findOneAndDelete({
+            uploadId: uploadId,
+            userId: userId
+        }, { session });
+
+        // Try to clean up any remaining S3 files (for failed uploads or exports)
+        if (uploadSession.s3Key) {
+            try {
+                await s3Service.deleteFile(uploadSession.s3Key);
+            } catch (s3Error) {
+                console.log(`S3 file cleanup for ${uploadSession.s3Key}: ${s3Error.message}`);
+                // Don't fail the entire operation if S3 cleanup fails
+            }
+        }
+
+        // Also try to delete any export files for this upload
+        try {
+            const exportKey = `exports/${uploadId}/${uploadSession.originalFileName}`;
+            await s3Service.deleteFile(exportKey);
+        } catch (s3Error) {
+            console.log(`S3 export file cleanup: ${s3Error.message}`);
+            // Don't fail the entire operation if S3 cleanup fails
+        }
+
+        // Commit the transaction
+        await session.commitTransaction();
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Upload and all associated data deleted successfully',
+            data: {
+                uploadId: uploadId,
+                fileName: uploadSession.fileName,
+                deletedRecords: excelDataDeleteResult.deletedCount,
+                expectedRecords: recordCount
+            }
+        });
+
+    } catch (error) {
+        // Rollback transaction on error
+        await session.abortTransaction();
+        
+        console.error('Delete upload error:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Error deleting upload',
+            error: error.message
+        });
+    } finally {
+        session.endSession();
+    }
+};
+
 // Get headers from user's data
 const getFileHeaders = async (req, res) => {
     try {
@@ -1231,6 +1326,7 @@ module.exports = {
     updateSheet,
     getUserFiles,
     deleteFile,
+    deleteUploadById,
     getFileHeaders,
     getUploadStatus,
     getUserUploadSessions,

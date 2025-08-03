@@ -111,6 +111,7 @@ app.get('/api/upload/status/:uploadId', authenticateToken, fileController.getUpl
 app.get('/api/upload/sessions', authenticateToken, fileController.getUserUploadSessions);
 app.post('/api/upload/resume/:uploadId', authenticateToken, fileController.resumeUpload);
 app.delete('/api/upload/cleanup', authenticateToken, fileController.cleanupFailedUploads);
+app.delete('/api/upload/delete/:uploadId', authenticateToken, fileController.deleteUploadById);
 
 // PayPal Payment API Routes (protected)
 app.post('/api/paypal/process-payment', authenticateToken, paypalController.processPayment);
