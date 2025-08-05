@@ -838,13 +838,13 @@ const getUploadStatus = async (req, res) => {
     }
 };
 
-// Get all upload sessions for user
+// Get all upload sessions from all users
 const getUserUploadSessions = async (req, res) => {
     try {
         const userId = req.user.userId;
         const { status, limit = 20, page = 1, search } = req.query;
 
-        const query = { userId: userId };
+        const query = {}; // Show sessions from all users
         if (status) {
             query.status = status;
         }
@@ -856,6 +856,7 @@ const getUserUploadSessions = async (req, res) => {
             ];
         }
         const sessions = await UploadSession.find(query)
+            .populate('userId', 'email name username') // Populate user information
             .sort({ createdAt: -1 })
             .limit(parseInt(limit))
             .skip((parseInt(page) - 1) * parseInt(limit));
@@ -883,7 +884,12 @@ const getUserUploadSessions = async (req, res) => {
                             Math.round((session.processedRows / session.totalRows) * 100) : 0),
                     startedAt: session.startedAt,
                     completedAt: session.completedAt,
-                    chargedCount: chargedCounts[idx]
+                    chargedCount: chargedCounts[idx],
+                    uploadedBy: {
+                        userId: session.userId._id,
+                        email: session.userId.email,
+                        name: session.userId.name || session.userId.username || 'Unknown User'
+                    }
                 })),
                 pagination: {
                     total,
@@ -895,7 +901,7 @@ const getUserUploadSessions = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error getting user upload sessions:', error);
+        console.error('Error getting all upload sessions:', error);
         res.status(500).json({
             status: 'error',
             message: 'Error getting upload sessions',
