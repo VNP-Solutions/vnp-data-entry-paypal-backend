@@ -645,79 +645,469 @@ const processPayment = async (req, res) => {
             const avsCode = processorResponse?.avs_code;
             const cvvCode = processorResponse?.cvv_code;
             
-            // Map response codes to user-friendly messages
-            const getDeclineReason = (code, avsCode, cvvCode) => {
+            // Get clean, specific decline message based on primary issue
+            const getDeclineReason = (code, avsCode, cvvCode, detailedStatusType) => {
+                // PRIORITY 1: Check response code first (most specific)
                 const declineCodes = {
-                    '0500': 'Your card was declined by your bank. Please contact your bank or try a different card.',
-                    '0510': 'The card number you entered is invalid. Please check your card number and try again.',
-                    '0520': 'The expiration date you entered is invalid. Please check your card\'s expiry date.',
-                    '0530': 'The security code (CVV) you entered is incorrect. Please check the 3 or 4 digit code on your card.',
-                    '0540': 'Your card has insufficient funds for this transaction. Please use a different card or contact your bank.',
-                    '0550': 'Your card has expired. Please use a different card.',
-                    '0560': 'Your card is restricted or blocked. Please contact your bank or try a different card.',
-                    '0570': 'This type of transaction is not permitted on your card. Please contact your bank or try a different card.',
-                    '0580': 'There is a temporary issue with payment processing. Please try again later or contact support.',
-                    '0590': 'The transaction amount exceeds your card limit. Please try a smaller amount or contact your bank.',
-                    '0600': 'Your card issuer requires additional verification. Please contact your bank.',
-                    '0700': 'The transaction was flagged for security reasons. Please contact your bank or try again.',
-                    '0800': 'Your card account is closed or inactive. Please use a different card.',
-                    '0900': 'The transaction was declined due to fraud prevention. Please contact your bank.',
-                    '1000': 'Your card has reached its transaction limit for today. Please try again tomorrow or contact your bank.'
+                    // Card-related errors
+                    '0500': 'Your card was declined by your bank.',
+                    '0501': 'Your card was declined. Please try again or use a different card.',
+                    '0502': 'Your card was declined due to suspected fraud.',
+                    '0503': 'Your card was declined by the issuer.',
+                    '0504': 'Your card was declined and cannot be processed at this time.',
+                    '0505': 'Your card was declined due to bank risk policies.',
+                    
+                    // Invalid card information
+                    '0510': 'The card number you entered is invalid.',
+                    '0511': 'The card number format is incorrect.',
+                    '0512': 'The card number you entered does not exist.',
+                    '0513': 'This card type is not accepted.',
+                    '0514': 'The card number checksum is invalid.',
+                    '0515': 'The card number length is incorrect.',
+                    
+                    // Expiration date errors
+                    '0520': 'The expiration date you entered is invalid.',
+                    '0521': 'The expiration month is invalid.',
+                    '0522': 'The expiration year is invalid.',
+                    '0523': 'The expiration date format is incorrect.',
+                    '0524': 'Your card has expired.',
+                    
+                    // CVV/Security code errors
+                    '0530': 'The security code (CVV) you entered is incorrect.',
+                    '0531': 'The CVV code is missing.',
+                    '0532': 'The CVV code format is invalid.',
+                    '0533': 'CVV verification failed.',
+                    '0534': 'CVV code mismatch.',
+                    
+                    // Insufficient funds
+                    '0540': 'Your card has insufficient funds for this transaction.',
+                    '0541': 'Insufficient available credit.',
+                    '0542': 'Your account balance is too low.',
+                    '0543': 'Credit limit exceeded.',
+                    '0544': 'Available funds exceeded.',
+                    
+                    // Expired card
+                    '0550': 'Your card has expired.',
+                    '0551': 'Your card has expired.',
+                    '0552': 'Your card has expired.',
+                    
+                    // Restricted/Blocked card
+                    '0560': 'Your card is restricted or blocked.',
+                    '0561': 'Your card has been temporarily blocked.',
+                    '0562': 'This card is permanently blocked.',
+                    '0563': 'Your card is restricted for online transactions.',
+                    '0564': 'Your card is restricted for international transactions.',
+                    '0565': 'Your card is blocked due to suspicious activity.',
+                    
+                    // Transaction not permitted
+                    '0570': 'This type of transaction is not permitted on your card.',
+                    '0571': 'Online transactions are not enabled on your card.',
+                    '0572': 'International transactions are not allowed on your card.',
+                    '0573': 'Recurring payments are not permitted on this card.',
+                    '0574': 'This merchant category is blocked on your card.',
+                    '0575': 'Your card does not support this type of payment.',
+                    
+                    // Processing issues
+                    '0580': 'There is a temporary issue with payment processing.',
+                    '0581': 'Payment gateway timeout occurred.',
+                    '0582': 'Connection error with card issuer.',
+                    '0583': 'System temporarily unavailable.',
+                    '0584': 'Processing error occurred.',
+                    '0585': 'Network error occurred.',
+                    
+                    // Amount/Limit errors
+                    '0590': 'The transaction amount exceeds your card limit.',
+                    '0591': 'Transaction amount is too large.',
+                    '0592': 'Transaction amount is too small.',
+                    '0593': 'Daily spending limit exceeded.',
+                    '0594': 'Monthly spending limit exceeded.',
+                    '0595': 'Single transaction limit exceeded.',
+                    
+                    // Verification required
+                    '0600': 'Your card issuer requires additional verification.',
+                    '0601': '3D Secure authentication required.',
+                    '0602': 'Additional authentication needed.',
+                    '0603': 'Your bank requires phone verification.',
+                    '0604': 'PIN verification required.',
+                    '0605': 'Strong customer authentication (SCA) required.',
+                    
+                    // Security/Fraud
+                    '0700': 'The transaction was flagged for security reasons.',
+                    '0701': 'Suspected fraudulent transaction.',
+                    '0702': 'Transaction blocked for security reasons.',
+                    '0703': 'Unusual activity detected.',
+                    '0704': 'Risk assessment failed.',
+                    '0705': 'Too many attempts detected.',
+                    
+                    // Account issues
+                    '0800': 'Your card account is closed or inactive.',
+                    '0801': 'Card account suspended.',
+                    '0802': 'Account frozen.',
+                    '0803': 'Account under review.',
+                    '0804': 'Card reported lost or stolen.',
+                    '0805': 'Account temporarily disabled.',
+                    
+                    // Fraud prevention
+                    '0900': 'The transaction was declined due to fraud prevention.',
+                    '0901': 'Fraud alert triggered.',
+                    '0902': 'Unusual transaction pattern detected.',
+                    '0903': 'Merchant blocked due to fraud prevention.',
+                    '0904': 'Location-based security block.',
+                    '0905': 'Time-based security block.',
+                    
+                    // Transaction limits
+                    '1000': 'Daily transaction limit exceeded.',
+                    '1001': 'Weekly transaction limit exceeded.',
+                    '1002': 'Monthly transaction limit exceeded.',
+                    '1003': 'Annual transaction limit exceeded.',
+                    '1004': 'Too many transactions for today.',
+                    '1005': 'Too many attempts, please wait.',
+                    
+                    // Address/Billing errors
+                    '1100': 'Billing address verification failed.',
+                    '1101': 'ZIP code verification failed.',
+                    '1102': 'Address mismatch detected.',
+                    '1103': 'Country code mismatch.',
+                    '1104': 'Address format invalid.',
+                    
+                    // Currency/Region errors
+                    '1200': 'Currency not supported.',
+                    '1201': 'Transaction not allowed in this region.',
+                    '1202': 'Card not valid for this country.',
+                    '1203': 'Currency conversion failed.',
+                    '1204': 'Exchange rate unavailable.',
+                    
+                    // Merchant/Business errors
+                    '1300': 'Merchant account issue.',
+                    '1301': 'Merchant not authorized for this card type.',
+                    '1302': 'Merchant category not allowed.',
+                    '1303': 'Merchant account suspended.',
+                    '1304': 'Merchant daily limit exceeded.',
+                    
+                    // System/Technical errors
+                    '1400': 'Technical error occurred.',
+                    '1401': 'Database connection error.',
+                    '1402': 'Service temporarily unavailable.',
+                    '1403': 'System maintenance in progress.',
+                    '1404': 'Configuration error.',
+                    
+                    // Regulatory/Compliance
+                    '1500': 'Transaction violates regulatory requirements.',
+                    '1501': 'KYC verification required.',
+                    '1502': 'AML check failed.',
+                    '1503': 'Transaction requires manual review.',
+                    '1504': 'Compliance hold on transaction.',
+                    
+                    // Refund/Chargeback related
+                    '1600': 'Refund processing error.',
+                    '1601': 'Chargeback protection triggered.',
+                    '1602': 'Previous chargeback history detected.',
+                    '1603': 'Refund limit exceeded.',
+                    
+                    // Generic/Fallback errors
+                    '9000': 'Payment processor error.',
+                    '9001': 'Unknown error occurred.',
+                    '9500': 'Payment processing failed due to technical issue.',
+                    '9999': 'General payment failure.'
                 };
-                
-                let baseMessage = declineCodes[code] || 'Your payment was declined by your card issuer. Please contact your bank or try a different card.';
-                
-                // Add specific guidance based on AVS/CVV failures
-                if (avsCode && avsCode !== 'Y') {
-                    baseMessage += ' Additionally, please verify that your billing address matches the address on file with your bank.';
+
+                // PRIORITY 1: If we have a specific message for the response code, use it
+                if (code && declineCodes[code]) {
+                    return declineCodes[code];
                 }
-                if (cvvCode && cvvCode !== 'M') {
-                    if (!baseMessage.toLowerCase().includes('cvv') && !baseMessage.toLowerCase().includes('security code')) {
-                        baseMessage += ' Please also double-check the security code (CVV) on your card.';
+
+                // PRIORITY 2: Fallback to CVV-specific messages (only if no response code match)
+                if (detailedStatusType === 'cvv_error' && cvvCode && cvvCode !== 'M') {
+                    switch (cvvCode) {
+                        case 'N':
+                            return 'The security code (CVV) you entered does not match our records.';
+                        case 'P':
+                            return 'The security code (CVV) could not be processed by your bank.';
+                        case 'S':
+                            return 'Your card should have a security code (CVV), but none was provided.';
+                        case 'U':
+                            return 'Your bank does not support CVV verification for this card.';
+                        default:
+                            return 'The security code (CVV) verification failed.';
                     }
                 }
                 
-                return baseMessage;
+                // PRIORITY 3: Fallback to AVS-specific messages
+                if (detailedStatusType === 'avs_error' && avsCode && !['Y', 'X'].includes(avsCode)) {
+                    return 'Your billing address does not match the address on file with your bank.';
+                }
+
+                // PRIORITY 4: Generic fallback
+                return 'Your payment was declined by your card issuer.';
+            };
+
+            // Get detailed status type for internal tracking
+            const getDetailedStatusType = (code, avsCode, cvvCode) => {
+                // PRIORITY 1: Check response code first (most specific)
+                const statusMapping = {
+                    // Card invalid
+                    '0510': 'card_invalid', '0511': 'card_invalid', '0512': 'card_invalid',
+                    '0513': 'card_invalid', '0514': 'card_invalid', '0515': 'card_invalid',
+                    
+                    // Card expired
+                    '0520': 'card_expired', '0521': 'card_expired', '0522': 'card_expired',
+                    '0523': 'card_expired', '0524': 'card_expired', '0550': 'card_expired',
+                    '0551': 'card_expired', '0552': 'card_expired',
+                    
+                    // CVV errors
+                    '0530': 'cvv_error', '0531': 'cvv_error', '0532': 'cvv_error',
+                    '0533': 'cvv_error', '0534': 'cvv_error',
+                    
+                    // Insufficient funds
+                    '0540': 'funds_insufficient', '0541': 'funds_insufficient', '0542': 'funds_insufficient',
+                    '0543': 'funds_insufficient', '0544': 'funds_insufficient', '0590': 'funds_insufficient',
+                    '0591': 'funds_insufficient', '0593': 'funds_insufficient', '0594': 'funds_insufficient',
+                    '0595': 'funds_insufficient', '1000': 'funds_insufficient', '1001': 'funds_insufficient',
+                    '1002': 'funds_insufficient', '1003': 'funds_insufficient', '1004': 'funds_insufficient',
+                    '1005': 'funds_insufficient',
+                    
+                    // Verification required
+                    '0600': 'verification_required', '0601': 'verification_required', '0602': 'verification_required',
+                    '0603': 'verification_required', '0604': 'verification_required', '0605': 'verification_required',
+                    
+                    // Fraud detected
+                    '0502': 'fraud_detected', '0505': 'fraud_detected', '0565': 'fraud_detected',
+                    '0700': 'fraud_detected', '0701': 'fraud_detected', '0702': 'fraud_detected',
+                    '0703': 'fraud_detected', '0704': 'fraud_detected', '0705': 'fraud_detected',
+                    '0900': 'fraud_detected', '0901': 'fraud_detected', '0902': 'fraud_detected',
+                    '0903': 'fraud_detected', '0904': 'fraud_detected', '0905': 'fraud_detected',
+                    
+                    // Account issues
+                    '0560': 'account_issue', '0561': 'account_issue', '0562': 'account_issue',
+                    '0563': 'account_issue', '0564': 'account_issue', '0570': 'account_issue',
+                    '0571': 'account_issue', '0572': 'account_issue', '0573': 'account_issue',
+                    '0574': 'account_issue', '0575': 'account_issue', '0800': 'account_issue',
+                    '0801': 'account_issue', '0802': 'account_issue', '0803': 'account_issue',
+                    '0804': 'account_issue', '0805': 'account_issue',
+                    
+                    // Region blocked
+                    '1200': 'region_blocked', '1201': 'region_blocked', '1202': 'region_blocked',
+                    '1203': 'region_blocked', '1204': 'region_blocked',
+                    
+                    // Processing errors
+                    '0580': 'processing_error', '0581': 'processing_error', '0582': 'processing_error',
+                    '0583': 'processing_error', '0584': 'processing_error', '0585': 'processing_error',
+                    '1300': 'processing_error', '1301': 'processing_error', '1302': 'processing_error',
+                    '1303': 'processing_error', '1304': 'processing_error', '1400': 'processing_error',
+                    '1401': 'processing_error', '1402': 'processing_error', '1403': 'processing_error',
+                    '1404': 'processing_error', '9000': 'processing_error', '9500': 'processing_error',
+                    
+                    // Compliance blocked
+                    '1500': 'compliance_blocked', '1501': 'compliance_blocked', '1502': 'compliance_blocked',
+                    '1503': 'compliance_blocked', '1504': 'compliance_blocked',
+                    
+                    // Chargeback blocked
+                    '1600': 'chargeback_blocked', '1601': 'chargeback_blocked', '1602': 'chargeback_blocked',
+                    '1603': 'chargeback_blocked',
+                    
+                    // Address/billing errors (map to avs_error)
+                    '1100': 'avs_error', '1101': 'avs_error', '1102': 'avs_error',
+                    '1103': 'avs_error', '1104': 'avs_error',
+                    
+                    // Amount errors (map to processing_error for invalid amounts)
+                    '0592': 'processing_error',
+                    
+                    // Unknown error
+                    '9001': 'unknown_error', '9999': 'unknown_error'
+                };
+
+                // PRIORITY 1: If we have a specific mapping for the response code, use it
+                if (code && statusMapping[code]) {
+                    return statusMapping[code];
+                }
+
+                // PRIORITY 2: Fallback to CVV-specific status (only if no response code match)
+                if (cvvCode && cvvCode !== 'M') {
+                    return 'cvv_error';
+                }
+                
+                // PRIORITY 3: Fallback to AVS-specific status
+                if (avsCode && !['Y', 'X'].includes(avsCode)) {
+                    return 'avs_error';
+                }
+
+                // PRIORITY 4: Generic fallback
+                return 'declined';
+            };
+
+            // Map detailed status to frontend status (3 statuses only)
+            const getFrontendStatus = (detailedStatus) => {
+                const processingErrors = [
+                    'processing_error', 'unknown_error'
+                ];
+                
+                if (processingErrors.includes(detailedStatus)) {
+                    return 'error';
+                }
+                
+                // All other statuses are payment declines
+                return 'declined';
             };
             
-            const declineReason = getDeclineReason(responseCode, avsCode, cvvCode);
+            const detailedStatusType = getDetailedStatusType(responseCode, avsCode, cvvCode);
+            const frontendStatus = getFrontendStatus(detailedStatusType);
+            const declineReason = getDeclineReason(responseCode, avsCode, cvvCode, detailedStatusType);
             
             // Additional helpful information
             let helpfulTips = '';
             
-            // Provide tips based on the type of decline
-            if (responseCode === '0540' || responseCode === '0590') {
-                helpfulTips = ' You may want to contact your bank to increase your limits or verify available funds.';
-            } else if (responseCode === '0560' || responseCode === '0570') {
-                helpfulTips = ' Your bank may have temporarily restricted online or international transactions for security.';
-            } else if (responseCode === '0500' || !responseCode) {
-                helpfulTips = ' This is often a temporary issue. You can try again in a few minutes or contact your bank to ensure your card is active for online transactions.';
+            // Provide clean, actionable tips based on the detailed status type
+            switch (detailedStatusType) {
+                case 'funds_insufficient':
+                    helpfulTips = 'Try: 1) Check your account balance, 2) Contact your bank to increase limits, or 3) Use a different card.';
+                    break;
+                case 'account_issue':
+                    helpfulTips = 'Contact your bank to remove any restrictions on online or international transactions.';
+                    break;
+                case 'verification_required':
+                    helpfulTips = 'Complete your bank\'s authentication process (3D Secure/SMS/call verification) and retry.';
+                    break;
+                case 'fraud_detected':
+                    helpfulTips = 'Call your bank immediately to confirm this transaction is legitimate, then try again.';
+                    break;
+                case 'card_invalid':
+                    helpfulTips = 'Verify your card number, expiry date, and name are entered correctly.';
+                    break;
+                case 'card_expired':
+                    helpfulTips = 'Update your payment method with a current, valid card.';
+                    break;
+                case 'cvv_error':
+                    // Enhanced CVV-specific tips
+                    switch (cvvCode) {
+                        case 'N':
+                            helpfulTips = 'Double-check the 3-digit code on the back of your card (or 4-digit for Amex).';
+                            break;
+                        case 'P':
+                            helpfulTips = 'Your bank couldn\'t process the security code. Try again or contact your bank.';
+                            break;
+                        case 'S':
+                            helpfulTips = 'Please enter the security code (CVV) found on your card.';
+                            break;
+                        case 'U':
+                            helpfulTips = 'Your bank doesn\'t support CVV verification. Try a different card or contact your bank.';
+                            break;
+                        default:
+                            helpfulTips = 'Verify the security code (CVV) on your card is entered correctly.';
+                    }
+                    break;
+                case 'avs_error':
+                    helpfulTips = 'Ensure your billing address exactly matches your bank records (including abbreviations and spacing).';
+                    break;
+                case 'region_blocked':
+                    helpfulTips = 'Use a domestic card or contact support if you believe this is an error.';
+                    break;
+                case 'processing_error':
+                    if (responseCode === '9500') {
+                        helpfulTips = 'Technical issue occurred during payment processing. Please try again or contact support.';
+                    } else {
+                        helpfulTips = 'Wait 2-3 minutes and try again. If it persists, contact our support team.';
+                    }
+                    break;
+                case 'compliance_blocked':
+                    helpfulTips = 'Additional identity verification is required. Please contact our support team for assistance.';
+                    break;
+                case 'chargeback_blocked':
+                    helpfulTips = 'Previous payment disputes detected. Contact our support team to resolve this issue.';
+                    break;
+                case 'unknown_error':
+                    helpfulTips = 'An unexpected error occurred. Please contact support with transaction details.';
+                    break;
+                default:
+                    helpfulTips = 'Try again in a few minutes or contact your bank to ensure your card works for online purchases.';
             }
             
-            console.log(`Payment declined for documentId ${documentId}: ${declineReason}`);
+            console.log(`Payment ${frontendStatus} (${detailedStatusType}) for documentId ${documentId}: ${declineReason}`);
             
             // Create a user-friendly decline message
-            const userMessage = `${declineReason}${helpfulTips}`;
+            const userMessage = helpfulTips ? `${declineReason} ${helpfulTips}` : declineReason;
             
-            // Return decline response without updating database
+            // Update database with failed/declined status
+            let databaseUpdated = false;
+            try {
+                // Determine charge status based on frontend status
+                let chargeStatus;
+                let statusField;
+                
+                if (frontendStatus === 'declined') {
+                    chargeStatus = 'Declined';
+                    statusField = 'Payment Declined';
+                } else if (frontendStatus === 'error') {
+                    chargeStatus = 'Failed';
+                    statusField = 'Payment Failed';
+                } else {
+                    chargeStatus = 'Failed';
+                    statusField = 'Payment Failed';
+                }
+
+                // Update the ExcelData record with failure/decline information
+                const updatedRecord = await ExcelData.findByIdAndUpdate(
+                    documentId,
+                    {
+                        'Charge status': chargeStatus,
+                        'Status': statusField,
+                        // Add failure details
+                        paypalOrderId: paymentDetails.orderId,
+                        paypalCaptureId: paymentDetails.captureId,
+                        paypalResponseCode: responseCode,
+                        paypalDeclineReason: declineReason,
+                        paypalStatusType: detailedStatusType,
+                        paypalFrontendStatus: frontendStatus,
+                        paypalAvsCode: avsCode,
+                        paypalCvvCode: cvvCode,
+                        paypalAmount: paymentDetails.amount,
+                        paypalCurrency: paymentDetails.currency,
+                        paypalCardBrand: paymentDetails.cardBrand,
+                        paypalCardType: paymentDetails.cardType,
+                        paypalCardLastDigits: paymentDetails.cardLastDigits,
+                        paypalCaptureStatus: paymentDetails.captureStatus,
+                        paypalCreateTime: paymentDetails.createTime,
+                        paypalUpdateTime: paymentDetails.updateTime,
+                        paypalCustomId: paymentDetails.customId,
+                        lastFailureDate: new Date().toISOString()
+                    },
+                    { new: true }
+                );
+
+                if (updatedRecord) {
+                    databaseUpdated = true;
+                    console.log(`Database updated for documentId ${documentId} with status: ${chargeStatus}`);
+                } else {
+                    console.error(`ExcelData record not found for documentId: ${documentId}`);
+                }
+            } catch (dbError) {
+                console.error('Database update error for failed payment:', dbError);
+                // Don't fail the response if DB update fails, just log it
+            }
+            
+            // Return decline response with database update status
             return res.status(402).json({
-                status: 'declined',
+                status: frontendStatus,
                 message: userMessage,
                 error_type: 'payment_declined',
                 data: {
                     paymentDetails: paymentDetails,
                     declineDetails: {
                         reason: declineReason,
+                        statusType: detailedStatusType,
+                        frontendStatus: frontendStatus,
                         responseCode: responseCode,
                         avsCode: avsCode,
                         cvvCode: cvvCode,
-                        helpfulTips: helpfulTips.trim()
+                        helpfulTips: helpfulTips
                     },
-                    databaseUpdated: false,
+                    databaseUpdated: databaseUpdated,
                     // Include minimal response data for debugging (admin only)
                     debugInfo: process.env.NODE_ENV === 'development' ? {
                         paypalOrderId: jsonResponse.id,
-                        paypalStatus: jsonResponse.status
+                        paypalOrderStatus: jsonResponse.status,
+                        paypalCaptureStatus: jsonResponse.purchase_units[0]?.payments?.captures[0]?.status,
+                        paypalResponseCode: responseCode,
+                        actualDeclineReason: jsonResponse.purchase_units[0]?.payments?.captures[0]?.status_details?.reason || 'Unknown'
                     } : null
                 }
             });
@@ -1092,7 +1482,44 @@ const processBulkPayments = async (req, res) => {
                     
                     console.log(`Bulk payment declined for documentId ${row._id}: ${declineReason}`);
                     
-                    // Return decline response without updating database
+                    // Update database with declined status for bulk payment
+                    let databaseUpdated = false;
+                    try {
+                        const updatedRecord = await ExcelData.findByIdAndUpdate(
+                            row._id,
+                            {
+                                'Charge status': 'Declined',
+                                'Status': 'Payment Declined',
+                                // Add decline details
+                                paypalOrderId: paymentDetails.orderId,
+                                paypalCaptureId: paymentDetails.captureId,
+                                paypalResponseCode: responseCode,
+                                paypalDeclineReason: declineReason,
+                                paypalAvsCode: avsCode,
+                                paypalCvvCode: cvvCode,
+                                paypalAmount: paymentDetails.amount,
+                                paypalCurrency: paymentDetails.currency,
+                                paypalCardBrand: paymentDetails.cardBrand,
+                                paypalCardType: paymentDetails.cardType,
+                                paypalCardLastDigits: paymentDetails.cardLastDigits,
+                                paypalCaptureStatus: paymentDetails.captureStatus,
+                                paypalCreateTime: paymentDetails.createTime,
+                                paypalUpdateTime: paymentDetails.updateTime,
+                                paypalCustomId: paymentDetails.customId,
+                                lastFailureDate: new Date().toISOString()
+                            },
+                            { new: true }
+                        );
+
+                        if (updatedRecord) {
+                            databaseUpdated = true;
+                            console.log(`Bulk payment database updated for documentId ${row._id} with status: Declined`);
+                        }
+                    } catch (dbError) {
+                        console.error('Database update error for bulk declined payment:', dbError);
+                    }
+                    
+                    // Return decline response with database update status
                     return {
                         documentId: row._id,
                         status: 'declined',
@@ -1103,19 +1530,54 @@ const processBulkPayments = async (req, res) => {
                             avsCode: avsCode,
                             cvvCode: cvvCode
                         },
-                        databaseUpdated: false
+                        databaseUpdated: databaseUpdated
                     };
                 }
 
                 // Only proceed with database update if payment was successful (COMPLETED)
                 if (captureStatus !== 'COMPLETED') {
-                    console.log(`Bulk payment status is ${captureStatus} for documentId ${row._id}, not updating database`);
+                    console.log(`Bulk payment status is ${captureStatus} for documentId ${row._id}, updating database with error status`);
+                    
+                    // Update database with error status for bulk payment
+                    let databaseUpdated = false;
+                    try {
+                        const updatedRecord = await ExcelData.findByIdAndUpdate(
+                            row._id,
+                            {
+                                'Charge status': 'Failed',
+                                'Status': 'Payment Failed',
+                                // Add error details
+                                paypalOrderId: paymentDetails.orderId,
+                                paypalCaptureId: paymentDetails.captureId,
+                                paypalAmount: paymentDetails.amount,
+                                paypalCurrency: paymentDetails.currency,
+                                paypalCardBrand: paymentDetails.cardBrand,
+                                paypalCardType: paymentDetails.cardType,
+                                paypalCardLastDigits: paymentDetails.cardLastDigits,
+                                paypalCaptureStatus: paymentDetails.captureStatus,
+                                paypalCreateTime: paymentDetails.createTime,
+                                paypalUpdateTime: paymentDetails.updateTime,
+                                paypalCustomId: paymentDetails.customId,
+                                paypalErrorReason: `Payment status is ${captureStatus}. Expected COMPLETED.`,
+                                lastFailureDate: new Date().toISOString()
+                            },
+                            { new: true }
+                        );
+
+                        if (updatedRecord) {
+                            databaseUpdated = true;
+                            console.log(`Bulk payment database updated for documentId ${row._id} with status: Failed`);
+                        }
+                    } catch (dbError) {
+                        console.error('Database update error for bulk failed payment:', dbError);
+                    }
+                    
                     return {
                         documentId: row._id,
                         status: 'error',
                         error: `Payment status is ${captureStatus}. Expected COMPLETED.`,
                         response: jsonResponse,
-                        databaseUpdated: false
+                        databaseUpdated: databaseUpdated
                     };
                 }
 
@@ -1222,12 +1684,36 @@ const processBulkPayments = async (req, res) => {
                     errorMessage = 'Payment processing failed for this transaction.';
                 }
                 
+                // Update database with error status for bulk payment
+                let databaseUpdated = false;
+                try {
+                    const updatedRecord = await ExcelData.findByIdAndUpdate(
+                        row._id,
+                        {
+                            'Charge status': 'Failed',
+                            'Status': 'Payment Failed',
+                            paypalErrorReason: errorMessage,
+                            paypalErrorType: errorType,
+                            lastFailureDate: new Date().toISOString()
+                        },
+                        { new: true }
+                    );
+
+                    if (updatedRecord) {
+                        databaseUpdated = true;
+                        console.log(`Bulk payment database updated for documentId ${row._id} with error status: Failed`);
+                    }
+                } catch (dbError) {
+                    console.error('Database update error for bulk payment error:', dbError);
+                }
+                
                 return {
                     documentId: row._id,
                     status: 'error',
                     message: errorMessage,
                     error_type: errorType,
                     timestamp: new Date().toISOString(),
+                    databaseUpdated: databaseUpdated,
                     // Include debug info only in development
                     ...(process.env.NODE_ENV === 'development' && { 
                         debugMessage: err.message,
@@ -2035,9 +2521,9 @@ const getAdminExcelData = async (req, res) => {
         const limitNum = Math.min(100, Math.max(1, parseInt(limit))); // Max 100 records per page
         const skip = (pageNum - 1) * limitNum;
 
-        // Build base query (always exclude "Ready to charge" and "Partially charged")
+        // Build base query (only show processed payment statuses)
         let query = {
-            'Charge status': { $nin: ['Ready to charge', 'Partially charged'] }
+            'Charge status': { $in: ['Charged', 'Failed', 'Declined'] }
         };
 
         // Add search functionality
@@ -2057,7 +2543,12 @@ const getAdminExcelData = async (req, res) => {
 
         // Add filters
         if (status) {
+            // Only allow filtering by approved statuses
+            const allowedStatuses = ['Charged', 'Failed', 'Declined'];
+            if (allowedStatuses.includes(status)) {
             query['Charge status'] = status;
+            }
+            // If invalid status provided, keep the base filter (show all approved statuses)
         }
         
         if (portfolio) {
@@ -2093,7 +2584,7 @@ const getAdminExcelData = async (req, res) => {
 
         // Get unique values for filters (helpful for frontend dropdowns)
         const [statusList, portfolioList, batchList] = await Promise.all([
-            ExcelData.distinct('Charge status', { 'Charge status': { $nin: ['Ready to charge', 'Partially charged'] } }),
+            ExcelData.distinct('Charge status', { 'Charge status': { $in: ['Charged', 'Failed', 'Declined'] } }),
             ExcelData.distinct('Portfolio', { 'Portfolio': { $ne: null, $ne: '' } }),
             ExcelData.distinct('Batch', { 'Batch': { $ne: null, $ne: '' } })
         ]);
