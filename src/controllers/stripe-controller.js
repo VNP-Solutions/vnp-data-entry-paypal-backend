@@ -1,10 +1,21 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const nodemailer = require('nodemailer');
+// Email configuration (you'll need to configure this with your email service)
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER || 'your-email@gmail.com',
+        pass: process.env.EMAIL_PASS || 'your-app-password'
+    }
+});
 
 /**
  * Create a Stripe Connect account
  * @param {Object} accountData - Account creation data
  * @returns {Object} - Stripe account object
  */
+
+
 const createConnectAccount = async (accountData) => {
     const { 
         country = 'US', 
@@ -37,6 +48,35 @@ const createConnectAccount = async (accountData) => {
         throw error;
     }
 };
+
+const createConnectAccountLinkAndEmail = async (accountId, accountEmail) => {
+    try {
+    const accountLink = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url:
+        process.env.FRONTEND_URL + "onboarding-retry" ||
+        "http://localhost:3000/onboarding-retry",
+      return_url:
+        process.env.FRONTEND_URL + "onboarding-success" ||
+        "http://localhost:3000/onboarding-success",
+      type: "account_onboarding",
+    });
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER || "your-email@gmail.com",
+      to: accountEmail,
+      subject: "Stripe Account Onboarding Link",
+        text: `Please click the following link to onboard your Stripe account: ${accountLink.url}. 
+      Note: link will be expired in 30min.`,
+    };
+
+    await transporter.sendMail(mailOptions);
+    } catch (error) {
+        console.error("Failed to send email:", error);
+        throw error;
+    }
+    
+}
 
 /**
  * Create a Stripe Connect account with controller configuration
@@ -126,7 +166,7 @@ const createAccount = async (req, res) => {
         };
 
         const account = await createConnectAccount(accountData);
-
+        console.log(account);
         // Extract important account details
         const accountDetails = {
             id: account.id,
@@ -142,6 +182,8 @@ const createAccount = async (req, res) => {
             default_currency: account.default_currency,
             controller: account.controller
         };
+
+        await createConnectAccountLinkAndEmail(account.id, account.email);
 
         // TODO: Save account information to database if needed
         // This would follow the same pattern as the PayPal controller
