@@ -497,7 +497,8 @@ const getSingleRowData = async (req, res) => {
 // Update sheet data in database
 const updateSheet = async (req, res) => {
     try {
-        const { documentId, ...updateData } = req.body;
+        const { documentId } = req.params;
+        const updateData = req.body;
         const userId = req.user.userId;
 
         if (!documentId) {
