@@ -100,7 +100,7 @@ app.put('/api/auth/profile', authenticateToken, authController.updateProfile);
 app.post('/api/upload', authenticateToken, fileController.upload.single('file'), fileController.uploadFile);
 app.get('/api/get-row-data', authenticateToken, fileController.getRowData);
 app.get('/api/get-single-row-data/:documentId', authenticateToken, fileController.getSingleRowData);
-app.put('/api/update-sheet/:documentId', authenticateToken, fileController.updateSheet);
+app.put('/api/update-sheet-data/:documentId', authenticateToken, fileController.updateSheet);
 app.get('/api/user-files', authenticateToken, fileController.getUserFiles);
 app.get('/api/file-headers', authenticateToken, fileController.getFileHeaders);
 app.delete('/api/delete-file/:documentId', authenticateToken, fileController.deleteFile);

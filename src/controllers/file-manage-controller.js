@@ -498,7 +498,9 @@ const getSingleRowData = async (req, res) => {
 const updateSheet = async (req, res) => {
     try {
         const { documentId } = req.params;
+        // console.log("documentId", documentId);
         const updateData = req.body;
+        // console.log("updateData", updateData);
         const userId = req.user.userId;
 
         if (!documentId) {
@@ -544,8 +546,7 @@ const updateSheet = async (req, res) => {
         // Update the document with new data
         const updateResult = await ExcelData.findOneAndUpdate(
             {
-                _id: documentId,
-                userId: userId
+                _id: documentId
             },
             {
                 $set: encryptedUpdateData
