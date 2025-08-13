@@ -681,8 +681,7 @@ const deleteUploadById = async (req, res) => {
 
         // First, verify that the upload session belongs to the user
         const uploadSession = await UploadSession.findOne({
-            uploadId: uploadId,
-            userId: userId
+            uploadId: uploadId
         });
 
         if (!uploadSession) {
@@ -694,20 +693,17 @@ const deleteUploadById = async (req, res) => {
 
         // Count how many records will be deleted for confirmation
         const recordCount = await ExcelData.countDocuments({
-            uploadId: uploadId,
-            userId: userId
+            uploadId: uploadId
         });
 
         // Delete all ExcelData records for this upload
         const excelDataDeleteResult = await ExcelData.deleteMany({
-            uploadId: uploadId,
-            userId: userId
+            uploadId: uploadId
         }, { session });
 
         // Delete the upload session
         const sessionDeleteResult = await UploadSession.findOneAndDelete({
-            uploadId: uploadId,
-            userId: userId
+            uploadId: uploadId
         }, { session });
 
         // Try to clean up any remaining S3 files (for failed uploads or exports)
