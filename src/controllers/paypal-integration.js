@@ -1332,15 +1332,10 @@ const processBulkPayments = async (req, res) => {
                     };
                 }
 
-                // Determine cardholder name - use OTA displayName if available, otherwise use row Name
-                let cardholderName;
-                if (row.otaId && row.otaId.displayName) {
-                    cardholderName = row.otaId.displayName;
-                    console.log(`Using OTA displayName as cardholder: ${cardholderName}`);
-                } else {
-                    cardholderName = row['Name'];
-                    console.log(`Using row Name as cardholder: ${cardholderName}`);
-                }
+                // Use guest's actual name as cardholder name (not OTA displayName)
+                // This is required by PayPal and banks for proper card validation
+                let cardholderName = row['Name'];
+                console.log(`Using guest Name as cardholder: ${cardholderName}`);
 
                 // Normalize expiry date to YYYY-MM format for PayPal
                 let normalizedExpiry = decrypted['Card Expire'];
