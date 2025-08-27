@@ -128,6 +128,7 @@ app.post('/api/stripe/create-account', authenticateToken, stripeController.creat
 app.get('/api/stripe/accounts', authenticateToken, stripeController.listAccounts);
 app.get('/api/stripe/account/:accountId', authenticateToken, stripeController.getAccountById);
 app.delete('/api/stripe/account/:accountId', authenticateToken, stripeController.deleteAccount);
+app.post('/api/stripe/payment', authenticateToken, stripeController.createSinglePayment);
 
 // OTA API Routes (protected)
 app.get('/api/ota', authenticateToken, otaController.getAllOTAs);

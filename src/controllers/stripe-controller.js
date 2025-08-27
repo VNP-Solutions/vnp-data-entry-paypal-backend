@@ -618,9 +618,47 @@ const deleteAccount = async (req, res) => {
     }
 };
 
+const createSinglePayment = async (req, res) => {
+    try {
+        const { totalAmount, currency, paymentMethod, applicationFeeAmount, accountId } = req.body;
+
+        const paymentIntent = await stripe.paymentIntents.create({
+            amount: totalAmount,
+            currency: currency || 'usd',
+            payment_method: paymentMethod || 'pm_card_visa', // Replace with actual payment method
+            confirm: true,
+            application_fee_amount: applicationFeeAmount, // 15% platform fee
+            transfer_data: {
+              destination: accountId, // Replace with your connected account ID
+            },
+            // Add this for redirect-based payment methods
+            automatic_payment_methods: {
+                enabled: true,
+                allow_redirects: 'never'
+            }
+          });
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Payment created successfully',
+            data: {
+                payment: paymentIntent
+            }
+        });
+    } catch (error) {
+        console.error("Failed to create Stripe payment:", error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to create Stripe payment',
+            error: error.message
+        });
+    }
+}
+
 module.exports = {
     createAccount,
     listAccounts,
     getAccountById,
-    deleteAccount
+    deleteAccount,
+    createSinglePayment
 }; 
