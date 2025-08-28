@@ -561,6 +561,88 @@ const getRowData = async (req, res) => {
   }
 };
 
+// Get all stripe row data from all users
+const getStripeRowData = async (req, res) => {
+  try {
+    const { limit = 10, page = 1, chargeStatus, search } = req.query;
+    const userId = req.user.userId;
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Always use StripeExcelData model for this endpoint
+    const DataModel = StripeExcelData;
+
+    // Build query object - show data from all users
+    const query = {};
+
+    // Add filter for Charge status if provided (skip if "All" is selected)
+    if (chargeStatus && chargeStatus.trim() !== "" && chargeStatus !== "All") {
+      query["Charge status"] = chargeStatus;
+    }
+
+    // Add search functionality across multiple fields if provided
+    if (search && search.trim() !== "") {
+      const searchRegex = { $regex: search, $options: "i" }; // Case-insensitive search
+      query.$or = [
+        { "Reservation ID": searchRegex },
+        { "Expedia ID": searchRegex },
+        { "Hotel Name": searchRegex },
+        { Name: searchRegex },
+        { Portfolio: searchRegex },
+        { Batch: searchRegex },
+      ];
+    }
+
+    // Get paginated data for the user with filters
+    const rowData = await DataModel.find(query)
+      .populate("otaId", "name displayName customer billingAddress isActive") // Populate OTA data
+      .skip(skip)
+      .limit(parseInt(limit))
+      .sort({ createdAt: -1 });
+
+    // Get total count for pagination with same filters
+    const totalCount = await DataModel.countDocuments(query);
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        rows: rowData.map((row) => {
+          // Remove MongoDB internal fields and userId, return only the Excel data
+          const { _id, userId, __v, createdAt, updatedAt, ...excelData } =
+            row.toObject();
+
+          // Decrypt sensitive card data before returning
+          const decryptedData = decryptCardData(excelData);
+
+          return {
+            id: _id,
+            ...decryptedData,
+            createdAt: createdAt,
+          };
+        }),
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(totalCount / parseInt(limit)),
+          totalCount: totalCount,
+          limit: parseInt(limit),
+        },
+        filters: {
+          chargeStatus: chargeStatus || null,
+          search: search || null,
+          paymentGateway: "stripe",
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get stripe row data error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Error retrieving stripe row data",
+      error: error.message,
+    });
+  }
+};
+
 // Get single row data for a user
 const getSingleRowData = async (req, res) => {
   try {
@@ -1788,6 +1870,7 @@ module.exports = {
   upload,
   uploadFile,
   getRowData,
+  getStripeRowData,
   getSingleRowData,
   updateSheet,
   getUserFiles,
