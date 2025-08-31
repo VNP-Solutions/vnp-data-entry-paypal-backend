@@ -1108,6 +1108,7 @@ const getUploadStatus = async (req, res) => {
         startedAt: uploadSession.startedAt,
         completedAt: uploadSession.completedAt,
         errorMessage: uploadSession.errorMessage,
+        paymentGateway: uploadSession.paymentGateway || "paypal",
       },
     });
   } catch (error) {
@@ -1175,6 +1176,7 @@ const getUserUploadSessions = async (req, res) => {
           startedAt: session.startedAt,
           completedAt: session.completedAt,
           chargedCount: chargedCounts[idx],
+          paymentGateway: session.paymentGateway || "paypal",
           uploadedBy: {
             userId: session.userId._id,
             email: session.userId.email,
