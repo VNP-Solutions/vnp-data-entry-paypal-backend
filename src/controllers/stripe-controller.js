@@ -1,4 +1,5 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const StripeSetting = require('../models/StripeSetting');
 const nodemailer = require('nodemailer');
 // Email configuration (you'll need to configure this with your email service)
 const transporter = nodemailer.createTransport({
@@ -620,7 +621,27 @@ const deleteAccount = async (req, res) => {
 
 const createSinglePayment = async (req, res) => {
     try {
-        const { totalAmount, currency, paymentMethod, applicationFeeAmount, accountId } = req.body;
+        const { totalAmount, currency, paymentMethod, accountId } = req.body;
+
+        if (!totalAmount || !accountId) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'totalAmount and accountId are required'
+            });
+        }
+
+        // Fetch VNP ratio from settings (default to 15%)
+        let vnpRatio = 15;
+        try {
+            const setting = await StripeSetting.findOne();
+            if (setting && typeof setting.vnpRatio === 'number') {
+                vnpRatio = Math.max(0, Math.min(100, Math.round(setting.vnpRatio)));
+            }
+        } catch (e) {
+            // If settings read fails, proceed with default ratio
+        }
+
+        const applicationFeeAmount = Math.round(Number(totalAmount) * (vnpRatio / 100));
 
         const paymentIntent = await stripe.paymentIntents.create({
             amount: totalAmount,
@@ -655,10 +676,67 @@ const createSinglePayment = async (req, res) => {
     }
 }
 
+// Get Stripe settings (vnpRatio)
+const getStripeSettings = async (req, res) => {
+    try {
+        let setting = await StripeSetting.findOne();
+        if (!setting) {
+            setting = await StripeSetting.create({ vnpRatio: 15 });
+        }
+        res.status(200).json({
+            status: 'success',
+            message: 'Stripe settings retrieved successfully',
+            data: { vnpRatio: setting.vnpRatio }
+        });
+    } catch (error) {
+        console.error('Failed to get Stripe settings:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to get Stripe settings',
+            error: error.message
+        });
+    }
+};
+
+// Update Stripe settings (vnpRatio)
+const updateStripeSettings = async (req, res) => {
+    try {
+        let { vnpRatio } = req.body;
+        if (typeof vnpRatio !== 'number') {
+            return res.status(400).json({
+                status: 'error',
+                message: 'vnpRatio must be a number'
+            });
+        }
+        vnpRatio = Math.max(0, Math.min(100, Math.round(vnpRatio)));
+
+        const updated = await StripeSetting.findOneAndUpdate(
+            {},
+            { vnpRatio },
+            { new: true, upsert: true }
+        );
+
+        res.status(200).json({
+            status: 'success',
+            message: 'Stripe settings updated successfully',
+            data: { vnpRatio: updated.vnpRatio }
+        });
+    } catch (error) {
+        console.error('Failed to update Stripe settings:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Failed to update Stripe settings',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     createAccount,
     listAccounts,
     getAccountById,
     deleteAccount,
-    createSinglePayment
+    createSinglePayment,
+    getStripeSettings,
+    updateStripeSettings
 }; 

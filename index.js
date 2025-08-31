@@ -226,6 +226,18 @@ app.post(
   stripeController.createSinglePayment
 );
 
+// Stripe Settings API Routes (protected)
+app.get(
+  "/api/stripe/settings",
+  authenticateToken,
+  stripeController.getStripeSettings
+);
+app.put(
+  "/api/stripe/settings",
+  authenticateToken,
+  stripeController.updateStripeSettings
+);
+
 // OTA API Routes (protected)
 app.get("/api/ota", authenticateToken, otaController.getAllOTAs);
 app.get("/api/ota/:id", authenticateToken, otaController.getOTAById);
