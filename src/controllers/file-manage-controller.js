@@ -1442,8 +1442,7 @@ const resumeUpload = async (req, res) => {
 
           // Add Stripe-specific field if payment gateway is stripe
           if (paymentGateway === "stripe") {
-            mappedData["Connected Account"] =
-              rowObject["Connected Account"] || null;
+            mappedData["Connected Account"] = rowObject["Connected Account"] || null;
           }
 
           const encryptedData = encryptCardData(mappedData);

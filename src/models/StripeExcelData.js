@@ -106,132 +106,82 @@ const stripeExcelDataSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
-    // Stripe-specific field
     "Connected Account": {
       type: String,
       default: null,
     },
     // Stripe Payment Details Fields
-    stripeOrderId: {
-      type: String,
+    stripePaymentIntentId: {
+      type: String, // maps payment.id
       default: null,
     },
-    stripeCaptureId: {
-      type: String,
+    stripeLatestChargeId: {
+      type: String, // maps payment.latest_charge
       default: null,
     },
-    stripeNetworkTransactionId: {
-      type: String,
+    stripePaymentMethodId: {
+      type: String, // maps payment.payment_method
       default: null,
     },
-    stripeFee: {
-      type: String,
+    stripeTransferDestination: {
+      type: String, // maps payment.transfer_data.destination
       default: null,
     },
-    stripeNetAmount: {
-      type: String,
+    stripeTransferGroup: {
+      type: String, // maps payment.transfer_group
       default: null,
     },
-    stripeCardBrand: {
-      type: String,
-      default: null,
-    },
-    stripeCardType: {
-      type: String,
-      default: null,
-    },
-    stripeAvsCode: {
-      type: String,
-      default: null,
-    },
-    stripeCvvCode: {
-      type: String,
-      default: null,
-    },
-    stripeCreateTime: {
-      type: String,
-      default: null,
-    },
-    stripeUpdateTime: {
-      type: String,
-      default: null,
-    },
-    stripeStatus: {
-      type: String,
+    stripeApplicationFeeAmount: {
+      type: Number, // maps payment.application_fee_amount
       default: null,
     },
     stripeAmount: {
-      type: String,
+      type: Number, // maps payment.amount
+      default: null,
+    },
+    stripeAmountReceived: {
+      type: Number, // maps payment.amount_received
       default: null,
     },
     stripeCurrency: {
-      type: String,
+      type: String, // maps payment.currency
       default: null,
     },
-    stripeCardLastDigits: {
-      type: String,
+    stripeStatus: {
+      type: String, // maps payment.status
       default: null,
     },
-    stripeCaptureStatus: {
-      type: String,
+    stripeCaptureMethod: {
+      type: String, // maps payment.capture_method
       default: null,
     },
-    stripeCustomId: {
-      type: String,
+    stripeConfirmationMethod: {
+      type: String, // maps payment.confirmation_method
       default: null,
     },
-    // Stripe Refund Details Fields
-    stripeRefundId: {
-      type: String,
+    stripeCreatedAt: {
+      type: Date, // maps payment.created (unix timestamp)
       default: null,
     },
-    stripeRefundStatus: {
-      type: String,
+    stripeClientSecret: {
+      type: String, // maps payment.client_secret
       default: null,
     },
-    stripeRefundAmount: {
-      type: String,
+    stripePaymentMethodTypes: {
+      type: [String], // maps payment.payment_method_types
+      default: [],
+    },
+    stripeAutomaticPaymentMethods: {
+      type: Object, // maps payment.automatic_payment_methods
+      default: {},
+    },
+    stripeDescription: {
+      type: String, // maps payment.description
       default: null,
     },
-    stripeRefundCurrency: {
-      type: String,
-      default: null,
-    },
-    stripeRefundGrossAmount: {
-      type: String,
-      default: null,
-    },
-    stripeRefundFee: {
-      type: String,
-      default: null,
-    },
-    stripeRefundNetAmount: {
-      type: String,
-      default: null,
-    },
-    stripeTotalRefunded: {
-      type: String,
-      default: null,
-    },
-    stripeRefundCreateTime: {
-      type: String,
-      default: null,
-    },
-    stripeRefundUpdateTime: {
-      type: String,
-      default: null,
-    },
-    stripeRefundInvoiceId: {
-      type: String,
-      default: null,
-    },
-    stripeRefundCustomId: {
-      type: String,
-      default: null,
-    },
-    stripeRefundNote: {
-      type: String,
-      default: null,
+    stripeMetadata: {
+      type: Object, // maps payment.metadata
+      default: {},
     },
     otaId: {
       type: mongoose.Schema.Types.ObjectId,
