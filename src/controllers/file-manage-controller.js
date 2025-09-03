@@ -1923,24 +1923,46 @@ const getTransactionHistory = async (req, res) => {
         .sort({ updatedAt: -1 });
     }
 
-    // Add payment gateway identifier to each record
-    const paypalDataWithGateway = paypalData.map((record) => ({
-      ...record.toObject(),
-      paymentGateway: "PayPal",
-      // Use paypalUpdateTime if available, otherwise use updatedAt
-      sortTimestamp: record.paypalUpdateTime
-        ? new Date(record.paypalUpdateTime)
-        : record.updatedAt,
-    }));
+    // Add payment gateway identifier and decrypt card data for each record
+    const paypalDataWithGateway = paypalData.map((record) => {
+      // Remove MongoDB internal fields and extract data
+      const { _id, userId, __v, createdAt, updatedAt, ...excelData } =
+        record.toObject();
 
-    const stripeDataWithGateway = stripeData.map((record) => ({
-      ...record.toObject(),
-      paymentGateway: "Stripe",
-      // Use stripeCreatedAt if available, otherwise use updatedAt
-      sortTimestamp: record.stripeCreatedAt
-        ? new Date(record.stripeCreatedAt)
-        : record.updatedAt,
-    }));
+      // Decrypt sensitive card data before returning
+      const decryptedData = decryptCardData(excelData);
+
+      return {
+        id: _id,
+        ...decryptedData,
+        paymentGateway: "PayPal",
+        createdAt: createdAt,
+        // Use paypalUpdateTime if available, otherwise use updatedAt
+        sortTimestamp: record.paypalUpdateTime
+          ? new Date(record.paypalUpdateTime)
+          : record.updatedAt,
+      };
+    });
+
+    const stripeDataWithGateway = stripeData.map((record) => {
+      // Remove MongoDB internal fields and extract data
+      const { _id, userId, __v, createdAt, updatedAt, ...excelData } =
+        record.toObject();
+
+      // Decrypt sensitive card data before returning
+      const decryptedData = decryptCardData(excelData);
+
+      return {
+        id: _id,
+        ...decryptedData,
+        paymentGateway: "Stripe",
+        createdAt: createdAt,
+        // Use stripeCreatedAt if available, otherwise use updatedAt
+        sortTimestamp: record.stripeCreatedAt
+          ? new Date(record.stripeCreatedAt)
+          : record.updatedAt,
+      };
+    });
 
     // Combine and sort all data by timestamp (newer first)
     const combinedData = [
