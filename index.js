@@ -231,6 +231,13 @@ app.post(
   stripeController.createSinglePayment
 );
 
+// Stripe Refund API Route (protected)
+app.post(
+  "/api/stripe/refund",
+  authenticateToken,
+  stripeController.processStripeRefund
+);
+
 // Stripe Settings API Routes (protected)
 app.get(
   "/api/stripe/settings",

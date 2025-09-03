@@ -183,6 +183,59 @@ const stripeExcelDataSchema = new mongoose.Schema(
       type: Object, // maps payment.metadata
       default: {},
     },
+    // Stripe Refund Fields
+    stripeRefundId: {
+      type: String,
+      default: null,
+    },
+    stripeRefundStatus: {
+      type: String,
+      default: null,
+    },
+    stripeRefundAmount: {
+      type: Number,
+      default: null,
+    },
+    stripeRefundCurrency: {
+      type: String,
+      default: null,
+    },
+    stripeRefundGrossAmount: {
+      type: Number,
+      default: null,
+    },
+    stripeRefundFee: {
+      type: Number,
+      default: null,
+    },
+    stripeRefundNetAmount: {
+      type: Number,
+      default: null,
+    },
+    stripeTotalRefunded: {
+      type: Number,
+      default: null,
+    },
+    stripeRefundCreateTime: {
+      type: Date,
+      default: null,
+    },
+    stripeRefundUpdateTime: {
+      type: Date,
+      default: null,
+    },
+    stripeRefundInvoiceId: {
+      type: String,
+      default: null,
+    },
+    stripeRefundCustomId: {
+      type: String,
+      default: null,
+    },
+    stripeRefundNote: {
+      type: String,
+      default: null,
+    },
     otaId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "OTA",

@@ -3,6 +3,7 @@ const StripeSetting = require("../models/StripeSetting");
 const ExcelData = require("../models/ExcelData");
 const { encryptCardData } = require("../utils/encryption");
 const nodemailer = require("nodemailer");
+const StripeExcelData = require("../models/StripeExcelData");
 
 // PayPal configuration
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
@@ -1223,6 +1224,122 @@ const processPayPalPayment = async (req, res) => {
   }
 };
 
+// Stripe Refund Processing
+const processStripeRefund = async (req, res) => {
+  try {
+    const {
+      paymentIntentId,
+      amount, // in cents (optional for partial refund)
+      reason, // optional: duplicate, fraudulent, requested_by_customer
+      documentId, // optional: our DB record id
+    } = req.body;
+
+    let intentId = paymentIntentId;
+
+    // If documentId is provided, try to resolve payment intent from DB
+    if (!intentId && documentId) {
+      const record = await StripeExcelData.findById(documentId);
+      if (!record) {
+        return res.status(404).json({
+          status: "error",
+          message: "Stripe record not found for provided documentId",
+        });
+      }
+      intentId = record.stripePaymentIntentId;
+      if (!intentId) {
+        return res.status(400).json({
+          status: "error",
+          message: "No Stripe payment intent id stored for this record",
+        });
+      }
+    }
+
+    if (!intentId) {
+      return res.status(400).json({
+        status: "error",
+        message:
+          "paymentIntentId or documentId is required to process a refund",
+      });
+    }
+
+    // Create refund
+    const refundParams = { payment_intent: intentId };
+    if (amount && Number(amount) > 0) {
+      refundParams.amount = Number(amount);
+    }
+    if (reason) {
+      refundParams.reason = reason;
+    }
+
+    const refund = await stripe.refunds.create(refundParams);
+
+    // Determine status fields based on refund amount
+    let chargeStatus = "Refunded";
+    let recordStatus = "Refund Processed";
+
+    try {
+      // If we have a DB record, update it
+      if (documentId) {
+        // Fetch original record to compare for partial vs full
+        const existing = await StripeExcelData.findById(documentId);
+        if (existing) {
+          const totalCharged = Number(existing.stripeAmount || 0);
+          const totalRefunded = Number(existing.stripeTotalRefunded || 0) +
+            Number(refund.amount || 0);
+
+          if (totalCharged > 0 && totalRefunded < totalCharged) {
+            chargeStatus = "Partially refunded";
+            recordStatus = "Partial Refund Processed";
+          }
+
+          await StripeExcelData.findByIdAndUpdate(
+            documentId,
+            {
+              "Charge status": chargeStatus,
+              Status: recordStatus,
+              stripeRefundId: refund.id,
+              stripeRefundStatus: refund.status,
+              stripeRefundAmount: refund.amount || null,
+              stripeRefundCurrency: refund.currency || null,
+              stripeRefundGrossAmount: refund.amount || null,
+              stripeRefundFee: null,
+              stripeRefundNetAmount: refund.amount || null,
+              stripeTotalRefunded: totalRefunded,
+              stripeRefundCreateTime: refund.created
+                ? new Date(refund.created * 1000)
+                : new Date(),
+              stripeRefundUpdateTime: new Date(),
+              stripeRefundInvoiceId: refund.charge || null,
+              stripeRefundCustomId: refund.metadata?.custom_id || null,
+              stripeRefundNote: refund.reason || reason || null,
+            },
+            { new: true }
+          );
+        }
+      }
+    } catch (dbError) {
+      console.error("Stripe refund DB update error:", dbError);
+      // Continue; don't fail response due to DB write
+    }
+
+    return res.status(200).json({
+      status: "success",
+      message: "Stripe refund created successfully",
+      data: {
+        refund,
+        chargeStatus,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to create Stripe refund:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "Failed to create refund",
+      error: error.message,
+    });
+  }
+};
+
 // Get Stripe settings (vnpRatio)
 const getStripeSettings = async (req, res) => {
   try {
@@ -1286,4 +1403,5 @@ module.exports = {
   createSinglePayment,
   getStripeSettings,
   updateStripeSettings,
+  processStripeRefund,
 };
