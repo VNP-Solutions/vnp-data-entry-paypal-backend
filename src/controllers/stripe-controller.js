@@ -832,7 +832,8 @@ const createSinglePayment = async (req, res) => {
 // Stripe Payment Processing
 const processStripePayment = async (req, res) => {
   try {
-    const { totalAmount, currency, paymentMethod, accountId } = req.body;
+    const { totalAmount, currency, paymentMethod, accountId, documentId } =
+      req.body;
 
     if (!totalAmount || !accountId) {
       return res.status(400).json({
@@ -871,11 +872,83 @@ const processStripePayment = async (req, res) => {
       },
     });
 
+    // Update database record if documentId is provided
+    if (documentId) {
+      try {
+        const StripeExcelData = require("../models/StripeExcelData");
+
+        let chargeStatus, recordStatus;
+        if (paymentIntent.status === "succeeded") {
+          chargeStatus = "Charged";
+          recordStatus = "Payment Processed";
+        } else if (paymentIntent.status === "requires_payment_method") {
+          chargeStatus = "Failed";
+          recordStatus = "Payment Failed";
+        } else {
+          chargeStatus = paymentIntent.status;
+          recordStatus = `Payment ${paymentIntent.status}`;
+        }
+
+        // Update the StripeExcelData record with payment status and details
+        const updatedRecord = await StripeExcelData.findByIdAndUpdate(
+          documentId,
+          {
+            "Charge status": chargeStatus,
+            Status: recordStatus,
+            // Store Stripe payment details
+            stripePaymentIntentId: paymentIntent.id,
+            stripeLatestChargeId: paymentIntent.latest_charge,
+            stripePaymentMethodId: paymentIntent.payment_method,
+            stripeTransferDestination: paymentIntent.transfer_data?.destination,
+            stripeTransferGroup: paymentIntent.transfer_group,
+            stripeApplicationFeeAmount: paymentIntent.application_fee_amount,
+            stripeAmount: paymentIntent.amount,
+            stripeAmountReceived: paymentIntent.amount_received,
+            stripeCurrency: paymentIntent.currency,
+            stripeStatus: paymentIntent.status,
+            stripeCaptureMethod: paymentIntent.capture_method,
+            stripeConfirmationMethod: paymentIntent.confirmation_method,
+            stripeCreatedAt: new Date(paymentIntent.created * 1000), // Convert unix timestamp to Date
+            stripeClientSecret: paymentIntent.client_secret,
+            stripePaymentMethodTypes: paymentIntent.payment_method_types,
+            stripeAutomaticPaymentMethods:
+              paymentIntent.automatic_payment_methods,
+            stripeDescription: paymentIntent.description,
+            stripeMetadata: paymentIntent.metadata,
+            ...(paymentIntent.status !== "succeeded" && {
+              lastFailureDate: new Date().toISOString(),
+            }),
+          },
+          { new: true }
+        );
+
+        if (!updatedRecord) {
+          console.error(
+            `StripeExcelData record not found for documentId: ${documentId}`
+          );
+        } else {
+          console.log(
+            `Database updated successfully for documentId ${documentId} with status: ${chargeStatus}`
+          );
+        }
+      } catch (dbError) {
+        console.error("Database update error:", dbError);
+        // Don't fail the response if DB update fails, just log it
+      }
+    }
+
     res.status(200).json({
       status: "success",
       message: "Stripe payment created successfully",
       data: {
         payment: paymentIntent,
+        databaseUpdated: documentId ? true : false,
+        chargeStatus:
+          paymentIntent.status === "succeeded"
+            ? "Charged"
+            : paymentIntent.status === "requires_payment_method"
+            ? "Failed"
+            : paymentIntent.status,
       },
     });
   } catch (error) {
