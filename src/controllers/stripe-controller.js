@@ -853,9 +853,7 @@ const processStripePayment = async (req, res) => {
       // If settings read fails, proceed with default ratio
     }
 
-    const applicationFeeAmount = Math.round(
-      Number(totalAmount) * (vnpRatio / 100)
-    );
+    const applicationFeeAmount = Math.round(Number(totalAmount) * (vnpRatio / 100));
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: totalAmount,
