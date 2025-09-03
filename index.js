@@ -117,6 +117,11 @@ app.get(
   fileController.getStripeRowData
 );
 app.get(
+  "/api/transaction-history",
+  authenticateToken,
+  fileController.getTransactionHistory
+);
+app.get(
   "/api/get-single-row-data/:documentId",
   authenticateToken,
   fileController.getSingleRowData

@@ -1442,7 +1442,8 @@ const resumeUpload = async (req, res) => {
 
           // Add Stripe-specific field if payment gateway is stripe
           if (paymentGateway === "stripe") {
-            mappedData["Connected Account"] = rowObject["Connected Account"] || null;
+            mappedData["Connected Account"] =
+              rowObject["Connected Account"] || null;
           }
 
           const encryptedData = encryptCardData(mappedData);
@@ -1867,6 +1868,120 @@ const downloadExcelByUploadId = async (req, res) => {
   }
 };
 
+// Get transaction history with combined PayPal and Stripe data
+const getTransactionHistory = async (req, res) => {
+  try {
+    const {
+      limit = 10,
+      page = 1,
+      search = "",
+      filter = "All", // 'All', 'PayPal', 'Stripe'
+    } = req.query;
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Build query for charged transactions only
+    const baseQuery = { "Charge status": "Charged" };
+
+    // Add search functionality if provided
+    let searchQuery = {};
+    if (search && search.trim() !== "") {
+      const searchRegex = { $regex: search.trim(), $options: "i" };
+      searchQuery = {
+        $or: [
+          { "Expedia ID": searchRegex },
+          { Batch: searchRegex },
+          { OTA: searchRegex },
+          { "Hotel Name": searchRegex },
+          { "Reservation ID": searchRegex },
+          { "Hotel Confirmation Code": searchRegex },
+          { Name: searchRegex },
+          { "VNP Work ID": searchRegex },
+        ],
+      };
+    }
+
+    let paypalData = [];
+    let stripeData = [];
+
+    // Fetch data based on filter
+    if (filter === "All" || filter === "PayPal" || !filter) {
+      // Get PayPal data
+      const paypalQuery = { ...baseQuery, ...searchQuery };
+      paypalData = await ExcelData.find(paypalQuery)
+        .populate("userId", "name email")
+        .populate("otaId", "name")
+        .sort({ updatedAt: -1 });
+    }
+
+    if (filter === "All" || filter === "Stripe" || !filter) {
+      // Get Stripe data
+      const stripeQuery = { ...baseQuery, ...searchQuery };
+      stripeData = await StripeExcelData.find(stripeQuery)
+        .populate("userId", "name email")
+        .populate("otaId", "name")
+        .sort({ updatedAt: -1 });
+    }
+
+    // Add payment gateway identifier to each record
+    const paypalDataWithGateway = paypalData.map((record) => ({
+      ...record.toObject(),
+      paymentGateway: "PayPal",
+      // Use paypalUpdateTime if available, otherwise use updatedAt
+      sortTimestamp: record.paypalUpdateTime
+        ? new Date(record.paypalUpdateTime)
+        : record.updatedAt,
+    }));
+
+    const stripeDataWithGateway = stripeData.map((record) => ({
+      ...record.toObject(),
+      paymentGateway: "Stripe",
+      // Use stripeCreatedAt if available, otherwise use updatedAt
+      sortTimestamp: record.stripeCreatedAt
+        ? new Date(record.stripeCreatedAt)
+        : record.updatedAt,
+    }));
+
+    // Combine and sort all data by timestamp (newer first)
+    const combinedData = [
+      ...paypalDataWithGateway,
+      ...stripeDataWithGateway,
+    ].sort((a, b) => new Date(b.sortTimestamp) - new Date(a.sortTimestamp));
+
+    // Apply pagination to combined data
+    const totalRecords = combinedData.length;
+    const paginatedData = combinedData.slice(skip, skip + parseInt(limit));
+
+    // Calculate pagination info
+    const totalPages = Math.ceil(totalRecords / parseInt(limit));
+    const hasNext = parseInt(page) < totalPages;
+    const hasPrev = parseInt(page) > 1;
+
+    res.status(200).json({
+      status: "success",
+      message: "Transaction history retrieved successfully",
+      data: paginatedData,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages,
+        totalRecords,
+        hasNext,
+        hasPrev,
+        limit: parseInt(limit),
+      },
+      filter: filter || "All",
+      search: search || "",
+    });
+  } catch (error) {
+    console.error("Transaction history error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to retrieve transaction history",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   upload,
   uploadFile,
@@ -1883,4 +1998,5 @@ module.exports = {
   resumeUpload,
   cleanupFailedUploads,
   downloadExcelByUploadId,
+  getTransactionHistory,
 };
