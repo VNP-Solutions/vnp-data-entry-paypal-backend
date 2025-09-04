@@ -14,7 +14,7 @@ function generateUploadId() {
   return `upload_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-// Simplified batch processing without duplicate checking
+// Optimized batch processing with better error handling
 async function processBatch(
   excelDataRecords,
   uploadId,
@@ -38,24 +38,28 @@ async function processBatch(
       } records (${paymentGateway.toUpperCase()})\x1b[0m`
     );
 
-    // Use bulkWrite for better performance
+    // Use optimized bulkWrite with better options
     try {
       const result = await DataModel.bulkWrite(
         excelDataRecords.map((record) => ({
           insertOne: { document: record },
         })),
-        { ordered: false } // Continue processing even if some records fail
+        {
+          ordered: false, // Continue processing even if some records fail
+          writeConcern: { w: 1, j: false }, // Faster writes with journal disabled for bulk ops
+        }
       );
 
       console.log(
-        `\x1b[32m✅ Batch ${batchNumber} SUCCESS: Saved ${result.insertedCount}/${excelDataRecords.length} records to database\x1b[0m`
+        `\x1b[32m✅ Batch ${batchNumber} SUCCESS: Saved ${result.insertedCount}/${excelDataRecords.length} records\x1b[0m`
       );
       return result.insertedCount;
     } catch (bulkWriteError) {
       // Handle bulk write errors gracefully
       if (
         bulkWriteError.code === 11000 ||
-        bulkWriteError.name === "BulkWriteError"
+        bulkWriteError.name === "BulkWriteError" ||
+        bulkWriteError.result
       ) {
         const successfulInserts = bulkWriteError.result
           ? bulkWriteError.result.insertedCount
@@ -98,131 +102,84 @@ async function checkExistingUpload(fileName, userId) {
   return { exists: false };
 }
 
-// Upload file API with optimized time complexity
-const uploadFile = async (req, res) => {
+// Optimized bulk OTA lookup function
+async function bulkOTALookup(otaNames) {
+  if (!otaNames || otaNames.length === 0) return {};
+
+  const uniqueOtaNames = [
+    ...new Set(otaNames.filter((name) => name && name.trim())),
+  ];
+  if (uniqueOtaNames.length === 0) return {};
+
+  try {
+    const otaRecords = await OTA.find({
+      name: { $in: uniqueOtaNames },
+      isActive: true,
+    }).lean();
+
+    // Create lookup map for O(1) access
+    const otaLookupMap = {};
+    otaRecords.forEach((record) => {
+      otaLookupMap[record.name] = record;
+    });
+
+    return otaLookupMap;
+  } catch (error) {
+    console.error("Bulk OTA lookup error:", error);
+    return {};
+  }
+}
+
+// Background file processing function
+async function processFileInBackground(uploadSession, fileBuffer) {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    // Check if file was uploaded
-    if (!req.file) {
-      return res.status(400).json({
-        status: "error",
-        message: "No file uploaded",
-      });
-    }
-
-    const originalFileName = req.file.originalname;
-    const userId = req.user.userId;
-    const vnpWorkId = req.body.vnpWorkId;
-
-    // Add timestamp to filename
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/[:.]/g, "-")
-      .slice(0, -5); // Format: YYYY-MM-DDTHH-MM-SS
-    const fileExtension = originalFileName.substring(
-      originalFileName.lastIndexOf(".")
+    console.log(
+      `\x1b[34m🚀 BACKGROUND PROCESSING: File "${uploadSession.fileName}" - ${
+        uploadSession.totalRows
+      } rows, ${uploadSession.paymentGateway.toUpperCase()} gateway\x1b[0m`
     );
-    const fileNameWithoutExt = originalFileName.substring(
-      0,
-      originalFileName.lastIndexOf(".")
-    );
-    const fileName = `${fileNameWithoutExt}_${timestamp}${fileExtension}`;
 
-    // Check for existing upload session (using original filename to avoid conflicts)
-    const existingCheck = await checkExistingUpload(originalFileName, userId);
-    if (existingCheck.exists) {
-      return res.status(409).json({
-        status: "error",
-        message: "File is already being processed",
-        data: {
-          uploadId: existingCheck.session.uploadId,
-          status: existingCheck.session.status,
-          processedRows: existingCheck.session.processedRows,
-          totalRows: existingCheck.session.totalRows,
-        },
-      });
-    }
-
-    // Download file from S3 to process
-    const fileBuffer = await s3Service.downloadFile(req.file.key);
-
-    // Read the Excel file
+    // Read the Excel file from buffer (no S3 download needed)
     const workbook = XLSX.read(fileBuffer);
     const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-    const cellA1 = firstSheet["A1"] ? firstSheet["A1"].v : null;
 
-    // Validate the content of cell A1
-    if (cellA1 !== "Expedia ID") {
-      await s3Service.deleteFile(req.file.key);
-      return res.status(400).json({
-        status: "error",
-        message: 'Invalid VNP Work file. Cell A1 must contain "Expedia ID"',
-      });
-    }
-
-    // Get sheet range and headers
+    // Get sheet range
     const range = firstSheet["!ref"];
     const totalRows = XLSX.utils.decode_range(range).e.r + 1;
     const totalCols = XLSX.utils.decode_range(range).e.c + 1;
 
-    // Get headers from the first row
-    const headers = [];
-    for (let col = 0; col < totalCols; col++) {
-      const cell = firstSheet[XLSX.utils.encode_cell({ r: 0, c: col })];
-      if (cell) {
-        const headerName = cell.v.toString().trim();
-        headers.push(headerName);
+    // First pass: collect all OTA names for bulk lookup
+    const allOtaNames = [];
+    for (let row = 1; row < totalRows; row++) {
+      const otaCell =
+        firstSheet[
+          XLSX.utils.encode_cell({
+            r: row,
+            c: uploadSession.headers.indexOf("OTA"),
+          })
+        ];
+      if (otaCell && otaCell.v) {
+        const otaName = otaCell.v.toString().trim();
+        if (otaName) allOtaNames.push(otaName);
       }
     }
 
-    // Auto-detect payment gateway based on Excel headers
-    // If "Connected Account" column exists, it's for Stripe, otherwise PayPal
-    const paymentGateway = headers.includes("Connected Account")
-      ? "stripe"
-      : "paypal";
-
+    // Perform bulk OTA lookup once
+    const otaLookupMap = await bulkOTALookup(allOtaNames);
     console.log(
-      `Detected payment gateway: ${paymentGateway} based on headers:`,
-      headers
+      `\x1b[36m📊 Bulk OTA lookup complete: ${
+        Object.keys(otaLookupMap).length
+      } OTA records found\x1b[0m`
     );
 
-    // Generate unique upload ID
-    const uploadId = generateUploadId();
-
-    console.log(
-      `\x1b[34m🚀 STARTING UPLOAD: File "${fileName}" - ${
-        totalRows - 1
-      } rows, ${paymentGateway.toUpperCase()} gateway\x1b[0m`
-    );
-
-    // Create upload session
-    const uploadSession = new UploadSession({
-      uploadId: uploadId,
-      userId: userId,
-      fileName: fileName,
-      originalFileName: originalFileName,
-      s3Key: req.file.key,
-      totalRows: totalRows - 1,
-      status: "processing",
-      vnpWorkId: vnpWorkId,
-      headers: headers,
-      batchSize: 100,
-      paymentGateway: paymentGateway,
-      // Add OTA fields to session for resume functionality
-      ota: null, // OTA will be determined from Excel data
-      otaId: null,
-    });
-
-    await uploadSession.save({ session });
-
-    // Process data in batches
-    const batchSize = 100;
+    // Process data in optimized batches
+    const batchSize = 500; // Increased batch size for better performance
     let totalProcessed = 0;
     let batchNumber = 1;
 
-    // Process file in chunks to avoid memory issues
     for (let startRow = 1; startRow < totalRows; startRow += batchSize) {
       const endRow = Math.min(startRow + batchSize - 1, totalRows - 1);
       const excelDataRecords = [];
@@ -240,108 +197,28 @@ const uploadFile = async (req, res) => {
           }
         }
 
-        const rowObject = headers.reduce((acc, header, index) => {
+        const rowObject = uploadSession.headers.reduce((acc, header, index) => {
           acc[header.trim()] = rowData[index]?.trim() || null;
           return acc;
         }, {});
 
         if (Object.keys(rowObject).length > 0 && rowObject["Expedia ID"]) {
-          // Normalize Card Expire to YYYY-MM format
-          let cardExpire = rowObject["Card Expire"];
-          if (cardExpire) {
-            // If it's a number (Excel date serial), convert to YYYY-MM
-            if (
-              !isNaN(cardExpire) &&
-              cardExpire !== "" &&
-              cardExpire !== null
-            ) {
-              // Excel's epoch starts at 1899-12-30
-              const serial = Number(cardExpire);
-              if (serial > 59) {
-                // Excel bug: 1900 is not a leap year
-                // Excel incorrectly treats 1900 as a leap year
-                // So, dates after 1900-02-28 are offset by +1
-                // But for just YYYY-MM, this is fine
-              }
-              const excelEpoch = new Date(1899, 11, 30);
-              const date = new Date(
-                excelEpoch.getTime() + serial * 24 * 60 * 60 * 1000
-              );
-              const year = date.getFullYear();
-              const month = (date.getMonth() + 1).toString().padStart(2, "0");
-              cardExpire = `${year}-${month}`;
-            } else {
-              // Try to parse as date string (YYYY-MM, MM/YYYY, MM-YYYY, etc.)
-              let match = null;
-              // YYYY-MM
-              if (/^\d{4}-\d{2}$/.test(cardExpire)) {
-                // already correct
-              } else if (
-                (match = cardExpire.match(/^(\d{1,2})[\/-](\d{4})$/))
-              ) {
-                // M/YYYY or MM/YYYY or M-YYYY or MM-YYYY
-                cardExpire = `${match[2]}-${match[1].padStart(2, "0")}`;
-              } else if (
-                (match = cardExpire.match(/^(\d{4})[\/-](\d{1,2})$/))
-              ) {
-                // YYYY/M or YYYY/MM or YYYY-M or YYYY-MM
-                cardExpire = `${match[1]}-${match[2].padStart(2, "0")}`;
-              } else if (
-                (match = cardExpire.match(/^(\d{1,2})[\/-](\d{2})$/))
-              ) {
-                // M/YY or MM/YY or M-YY or MM-YY
-                cardExpire = `20${match[2]}-${match[1].padStart(2, "0")}`;
-              } else if (
-                (match = cardExpire.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/))
-              ) {
-                // DD-MM-YYYY or DD/MM/YYYY
-                cardExpire = `${match[3]}-${match[2]}`;
-              } else {
-                // fallback: try Date.parse
-                const d = new Date(cardExpire);
-                if (!isNaN(d)) {
-                  const year = d.getFullYear();
-                  const month = (d.getMonth() + 1).toString().padStart(2, "0");
-                  cardExpire = `${year}-${month}`;
-                }
-              }
-            }
-          }
+          // Normalize Card Expire to YYYY-MM format (optimized)
+          let cardExpire = normalizeCardExpiry(rowObject["Card Expire"]);
 
-          // Process OTA field from Excel sheet
-          let otaRecord = null;
+          // Use pre-fetched OTA data (O(1) lookup instead of database query)
           const otaFromExcel = rowObject["OTA"]?.trim();
-
-          if (otaFromExcel) {
-            try {
-              console.log(`Processing OTA from Excel: "${otaFromExcel}"`);
-              otaRecord = await OTA.findOne({
-                name: otaFromExcel,
-                isActive: true,
-              });
-
-              if (otaRecord) {
-                console.log(
-                  `Found OTA record for ${otaFromExcel}:`,
-                  otaRecord._id
-                );
-              } else {
-                console.log(`No OTA record found for: "${otaFromExcel}"`);
-              }
-            } catch (otaError) {
-              console.error("Error finding OTA record:", otaError);
-            }
-          }
+          const otaRecord = otaFromExcel ? otaLookupMap[otaFromExcel] : null;
 
           const mappedData = {
-            userId: userId,
-            uploadId: uploadId,
-            fileName: fileName,
+            userId: uploadSession.userId,
+            uploadId: uploadSession.uploadId,
+            fileName: uploadSession.fileName,
             uploadStatus: "processing",
             rowNumber: row,
             "Expedia ID": rowObject["Expedia ID"],
             Batch: rowObject["Batch"],
-            OTA: rowObject["OTA"], // Store the OTA name from Excel
+            OTA: rowObject["OTA"],
             "Posting Type": rowObject["Posting Type"],
             Portfolio: rowObject["Portfolio"],
             "Hotel Name": rowObject["Hotel Name"],
@@ -360,17 +237,17 @@ const uploadFile = async (req, res) => {
               rowObject["Soft Descriptor"] || rowObject["BT MAID"],
             "VNP Work ID": rowObject["VNP Work ID"],
             Status: rowObject["Status"],
-            // Add OTA fields based on Excel data
             ota: otaRecord?.name || otaFromExcel || null,
             otaId: otaRecord?._id || null,
           };
 
-          // Add Stripe-specific field if payment gateway is stripe
-          if (paymentGateway === "stripe") {
+          // Add Stripe-specific field if needed
+          if (uploadSession.paymentGateway === "stripe") {
             mappedData["Connected Account"] =
               rowObject["Connected Account"] || null;
           }
 
+          // Encrypt sensitive data
           const encryptedData = encryptCardData(mappedData);
           excelDataRecords.push(encryptedData);
         }
@@ -380,19 +257,21 @@ const uploadFile = async (req, res) => {
       if (excelDataRecords.length > 0) {
         const processedCount = await processBatch(
           excelDataRecords,
-          uploadId,
+          uploadSession.uploadId,
           batchNumber,
-          paymentGateway
+          uploadSession.paymentGateway
         );
         totalProcessed += processedCount;
 
         // Update session progress
         await UploadSession.findOneAndUpdate(
-          { uploadId: uploadId },
+          { uploadId: uploadSession.uploadId },
           {
             processedRows: totalProcessed,
             status:
-              totalProcessed >= totalRows - 1 ? "completed" : "processing",
+              totalProcessed >= uploadSession.totalRows
+                ? "completed"
+                : "processing",
           },
           { session }
         );
@@ -400,15 +279,15 @@ const uploadFile = async (req, res) => {
 
       batchNumber++;
 
-      // Minimal delay to prevent overwhelming the database
-      if (batchNumber % 10 === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
+      // Smaller delay for better performance
+      if (batchNumber % 20 === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
       }
     }
 
     // Mark session as completed
     await UploadSession.findOneAndUpdate(
-      { uploadId: uploadId },
+      { uploadId: uploadSession.uploadId },
       {
         status: "completed",
         completedAt: new Date(),
@@ -417,34 +296,210 @@ const uploadFile = async (req, res) => {
     );
 
     console.log(
-      `\x1b[32m✅ UPLOAD COMPLETE: File "${fileName}" processed successfully - ${totalProcessed} records saved to database\x1b[0m`
+      `\x1b[32m✅ BACKGROUND PROCESSING COMPLETE: File "${uploadSession.fileName}" processed successfully - ${totalProcessed} records saved\x1b[0m`
     );
 
     // Delete file from S3 after successful processing
-    await s3Service.deleteFile(req.file.key);
+    await s3Service.deleteFile(uploadSession.s3Key);
 
     // Commit transaction
     await session.commitTransaction();
-
-    res.status(200).json({
-      status: "success",
-      message: "File uploaded and processed successfully",
-      data: {
-        uploadId: uploadId,
-        fileName: fileName,
-        totalRows: totalRows - 1,
-        totalColumns: totalCols,
-        rowsProcessed: totalProcessed,
-        headers: headers,
-        status: "completed",
-      },
-    });
   } catch (error) {
     // Rollback transaction on error
     await session.abortTransaction();
 
     console.log(
-      `\x1b[31m❌ UPLOAD ERROR: Failed to process file - ${error.message}\x1b[0m`
+      `\x1b[31m❌ BACKGROUND PROCESSING ERROR: Failed to process file - ${error.message}\x1b[0m`
+    );
+
+    // Update session status to failed
+    try {
+      await UploadSession.findOneAndUpdate(
+        { uploadId: uploadSession.uploadId },
+        {
+          status: "failed",
+          errorMessage: error.message,
+        }
+      );
+    } catch (sessionError) {
+      console.error("Error updating session status:", sessionError);
+    }
+  } finally {
+    session.endSession();
+  }
+}
+
+// Optimized card expiry normalization function
+function normalizeCardExpiry(cardExpire) {
+  if (!cardExpire) return null;
+
+  // If it's a number (Excel date serial), convert to YYYY-MM
+  if (!isNaN(cardExpire) && cardExpire !== "" && cardExpire !== null) {
+    const serial = Number(cardExpire);
+    const excelEpoch = new Date(1899, 11, 30);
+    const date = new Date(excelEpoch.getTime() + serial * 24 * 60 * 60 * 1000);
+    const year = date.getFullYear();
+    const month = (date.getMonth() + 1).toString().padStart(2, "0");
+    return `${year}-${month}`;
+  }
+
+  // Parse date string patterns
+  let match = null;
+  if (/^\d{4}-\d{2}$/.test(cardExpire)) {
+    return cardExpire; // Already correct format
+  } else if ((match = cardExpire.match(/^(\d{1,2})[\/-](\d{4})$/))) {
+    return `${match[2]}-${match[1].padStart(2, "0")}`;
+  } else if ((match = cardExpire.match(/^(\d{4})[\/-](\d{1,2})$/))) {
+    return `${match[1]}-${match[2].padStart(2, "0")}`;
+  } else if ((match = cardExpire.match(/^(\d{1,2})[\/-](\d{2})$/))) {
+    return `20${match[2]}-${match[1].padStart(2, "0")}`;
+  } else if ((match = cardExpire.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/))) {
+    return `${match[3]}-${match[2]}`;
+  }
+
+  // Fallback: try Date.parse
+  const d = new Date(cardExpire);
+  if (!isNaN(d)) {
+    const year = d.getFullYear();
+    const month = (d.getMonth() + 1).toString().padStart(2, "0");
+    return `${year}-${month}`;
+  }
+
+  return cardExpire;
+}
+
+// Optimized upload file API - returns immediately and processes in background
+const uploadFile = async (req, res) => {
+  try {
+    // Check if file was uploaded
+    if (!req.file) {
+      return res.status(400).json({
+        status: "error",
+        message: "No file uploaded",
+      });
+    }
+
+    const originalFileName = req.file.originalname;
+    const userId = req.user.userId;
+    const vnpWorkId = req.body.vnpWorkId;
+
+    // Add timestamp to filename
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .slice(0, -5);
+    const fileExtension = originalFileName.substring(
+      originalFileName.lastIndexOf(".")
+    );
+    const fileNameWithoutExt = originalFileName.substring(
+      0,
+      originalFileName.lastIndexOf(".")
+    );
+    const fileName = `${fileNameWithoutExt}_${timestamp}${fileExtension}`;
+
+    // Check for existing upload session
+    const existingCheck = await checkExistingUpload(originalFileName, userId);
+    if (existingCheck.exists) {
+      return res.status(409).json({
+        status: "error",
+        message: "File is already being processed",
+        data: {
+          uploadId: existingCheck.session.uploadId,
+          status: existingCheck.session.status,
+          processedRows: existingCheck.session.processedRows,
+          totalRows: existingCheck.session.totalRows,
+        },
+      });
+    }
+
+    // Download file from S3 for processing (done once, used for validation and background processing)
+    const fileBuffer = await s3Service.downloadFile(req.file.key);
+
+    // Quick validation - read just the first row
+    const workbook = XLSX.read(fileBuffer);
+    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+    const cellA1 = firstSheet["A1"] ? firstSheet["A1"].v : null;
+
+    // Validate file format
+    if (cellA1 !== "Expedia ID") {
+      await s3Service.deleteFile(req.file.key);
+      return res.status(400).json({
+        status: "error",
+        message: 'Invalid VNP Work file. Cell A1 must contain "Expedia ID"',
+      });
+    }
+
+    // Get basic file info for immediate response
+    const range = firstSheet["!ref"];
+    const totalRows = XLSX.utils.decode_range(range).e.r + 1;
+    const totalCols = XLSX.utils.decode_range(range).e.c + 1;
+
+    // Get headers
+    const headers = [];
+    for (let col = 0; col < totalCols; col++) {
+      const cell = firstSheet[XLSX.utils.encode_cell({ r: 0, c: col })];
+      if (cell) {
+        const headerName = cell.v.toString().trim();
+        headers.push(headerName);
+      }
+    }
+
+    // Auto-detect payment gateway
+    const paymentGateway = headers.includes("Connected Account")
+      ? "stripe"
+      : "paypal";
+
+    // Generate unique upload ID
+    const uploadId = generateUploadId();
+
+    console.log(
+      `\x1b[34m🚀 UPLOAD INITIATED: File "${fileName}" - ${
+        totalRows - 1
+      } rows, ${paymentGateway.toUpperCase()} gateway\x1b[0m`
+    );
+
+    // Create upload session
+    const uploadSession = new UploadSession({
+      uploadId: uploadId,
+      userId: userId,
+      fileName: fileName,
+      originalFileName: originalFileName,
+      s3Key: req.file.key,
+      totalRows: totalRows - 1,
+      status: "processing",
+      vnpWorkId: vnpWorkId,
+      headers: headers,
+      batchSize: 500,
+      paymentGateway: paymentGateway,
+      ota: null,
+      otaId: null,
+    });
+
+    await uploadSession.save();
+
+    // Start background processing (don't await - process asynchronously)
+    processFileInBackground(uploadSession, fileBuffer).catch((error) => {
+      console.error("Background processing error:", error);
+    });
+
+    // Return immediate response
+    res.status(202).json({
+      status: "success",
+      message: "File upload initiated successfully. Processing in background.",
+      data: {
+        uploadId: uploadId,
+        fileName: fileName,
+        totalRows: totalRows - 1,
+        totalColumns: totalCols,
+        headers: headers,
+        status: "processing",
+        message:
+          "File is being processed. Use the upload status endpoint to track progress.",
+      },
+    });
+  } catch (error) {
+    console.log(
+      `\x1b[31m❌ UPLOAD ERROR: Failed to initiate upload - ${error.message}\x1b[0m`
     );
     console.error("Upload error:", error);
 
@@ -458,18 +513,18 @@ const uploadFile = async (req, res) => {
             errorMessage: error.message,
           }
         );
-      } catch (sessionError) {
-        console.error("Error updating session status:", sessionError);
+        // Clean up S3 file on error
+        await s3Service.deleteFile(req.file.key);
+      } catch (cleanupError) {
+        console.error("Error during cleanup:", cleanupError);
       }
     }
 
     res.status(500).json({
       status: "error",
-      message: "Error processing file",
+      message: "Error initiating file upload",
       error: error.message,
     });
-  } finally {
-    session.endSession();
   }
 };
 
