@@ -854,8 +854,12 @@ const processStripePayment = async (req, res) => {
       // If settings read fails, proceed with default ratio
     }
 
-    const applicationFeeAmount = Math.round(Number(totalAmount) * (vnpRatio / 100));
-
+    // const applicationFeeAmount = Math.round(Number(totalAmount) * (vnpRatio / 100));
+    // Compute application fee in cents without rounding (truncate fractional cents)
+    const totalAmountCents = Number(totalAmount) || 0; // totalAmount is expected in cents
+    const rawFeeCents = (totalAmountCents * (Number(vnpRatio) || 0)) / 100;
+    const applicationFeeAmount = rawFeeCents >= 0 ? Math.trunc(rawFeeCents) : -Math.trunc(-rawFeeCents);
+    
     const paymentIntent = await stripe.paymentIntents.create({
       amount: totalAmount,
       currency: currency || "usd",
