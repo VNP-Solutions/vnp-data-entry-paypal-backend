@@ -4,6 +4,8 @@ const ExcelData = require("../models/ExcelData");
 const { encryptCardData } = require("../utils/encryption");
 const nodemailer = require("nodemailer");
 const StripeExcelData = require("../models/StripeExcelData");
+const fs = require("fs");
+const path = require("path");
 
 // PayPal configuration
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
@@ -1399,6 +1401,396 @@ const updateStripeSettings = async (req, res) => {
   }
 };
 
+/**
+ * Handle Stripe webhook events for disputes
+ * POST /api/stripe/webhook
+ */
+const handleStripeWebhook = async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  
+  let event;
+
+  try {
+    // Verify webhook signature
+    event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+  } catch (err) {
+    console.log(`Webhook signature verification failed: ${err.message}`);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  console.log(`Received webhook event: ${event.type}`);
+
+  try {
+    // Handle dispute events
+    switch (event.type) {
+      case 'charge.dispute.created':
+        await handleDisputeCreated(event.data.object);
+        break;
+      
+      case 'charge.dispute.updated':
+        await handleDisputeUpdated(event.data.object);
+        break;
+        
+      case 'charge.dispute.closed':
+        await handleDisputeClosed(event.data.object);
+        break;
+        
+      default:
+        console.log(`Unhandled event type: ${event.type}`);
+    }
+
+    res.json({ received: true });
+  } catch (error) {
+    console.error(`Error processing webhook: ${error.message}`);
+    res.status(500).json({
+      status: "error",
+      message: "Error processing webhook",
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Handle dispute created event
+ */
+const handleDisputeCreated = async (dispute) => {
+  console.log(`New dispute created: ${dispute.id}`);
+  
+  try {
+    // Find the record by charge ID
+    const record = await StripeExcelData.findOne({
+      stripeLatestChargeId: dispute.charge
+    });
+
+    if (record) {
+      // Update record with dispute information
+      await StripeExcelData.findByIdAndUpdate(record._id, {
+        stripeDisputeId: dispute.id,
+        stripeDisputeStatus: dispute.status,
+        stripeDisputeReason: dispute.reason,
+        stripeDisputeAmount: dispute.amount,
+        stripeDisputeCurrency: dispute.currency,
+        stripeDisputeCreatedAt: new Date(dispute.created * 1000),
+        stripeDisputeEvidenceDueBy: dispute.evidence_details?.due_by ? new Date(dispute.evidence_details.due_by * 1000) : null,
+        stripeDisputeNetworkReasonCode: dispute.network_reason_code,
+        stripeDisputeIsChargeRefundable: dispute.is_charge_refundable,
+        stripeDisputeBalanceTransactions: dispute.balance_transactions?.map(bt => bt.id) || [],
+        stripeDisputeMetadata: dispute.metadata || {},
+        "Charge status": "Disputed",
+        Status: "Payment Disputed"
+      });
+
+      console.log(`Updated record ${record._id} with dispute information`);
+
+      // Send email notification about dispute
+      await sendDisputeNotification(record, dispute, 'created');
+    } else {
+      console.log(`No record found for charge: ${dispute.charge}`);
+    }
+  } catch (error) {
+    console.error(`Error handling dispute created: ${error.message}`);
+    throw error;
+  }
+};
+
+/**
+ * Handle dispute updated event
+ */
+const handleDisputeUpdated = async (dispute) => {
+  console.log(`Dispute updated: ${dispute.id}`);
+  
+  try {
+    const record = await StripeExcelData.findOne({
+      stripeDisputeId: dispute.id
+    });
+
+    if (record) {
+      await StripeExcelData.findByIdAndUpdate(record._id, {
+        stripeDisputeStatus: dispute.status,
+        stripeDisputeEvidenceDueBy: dispute.evidence_details?.due_by ? new Date(dispute.evidence_details.due_by * 1000) : null,
+        stripeDisputeEvidenceSubmitted: dispute.evidence_details?.submission_count > 0,
+        stripeDisputeEvidenceDetails: dispute.evidence_details || {},
+        stripeDisputeMetadata: dispute.metadata || {}
+      });
+
+      console.log(`Updated dispute ${dispute.id} information`);
+    }
+  } catch (error) {
+    console.error(`Error handling dispute updated: ${error.message}`);
+    throw error;
+  }
+};
+
+/**
+ * Handle dispute closed event
+ */
+const handleDisputeClosed = async (dispute) => {
+  console.log(`Dispute ${dispute.id} closed with status: ${dispute.status}`);
+  
+  try {
+    const record = await StripeExcelData.findOne({
+      stripeDisputeId: dispute.id
+    });
+
+    if (record) {
+      let chargeStatus = "Disputed";
+      let recordStatus = "Payment Disputed";
+
+      // Update status based on dispute outcome
+      if (dispute.status === 'won') {
+        chargeStatus = "Dispute Won";
+        recordStatus = "Dispute Resolved - Won";
+      } else if (dispute.status === 'lost') {
+        chargeStatus = "Dispute Lost";
+        recordStatus = "Dispute Resolved - Lost";
+      } else if (dispute.status === 'charge_refunded') {
+        chargeStatus = "Refunded";
+        recordStatus = "Dispute Resolved - Refunded";
+      }
+
+      await StripeExcelData.findByIdAndUpdate(record._id, {
+        stripeDisputeStatus: dispute.status,
+        "Charge status": chargeStatus,
+        Status: recordStatus
+      });
+
+      console.log(`Updated record ${record._id} with final dispute status: ${dispute.status}`);
+
+      // Send email notification about dispute resolution
+      await sendDisputeNotification(record, dispute, 'closed');
+    }
+  } catch (error) {
+    console.error(`Error handling dispute closed: ${error.message}`);
+    throw error;
+  }
+};
+
+/**
+ * Send email notification about dispute events
+ */
+const sendDisputeNotification = async (record, dispute, eventType) => {
+  try {
+    const subject = eventType === 'created' 
+      ? `New Dispute Created - ${dispute.id}`
+      : `Dispute Resolved - ${dispute.id}`;
+
+    const emailBody = `
+      <h2>Stripe Dispute ${eventType === 'created' ? 'Created' : 'Resolved'}</h2>
+      <p><strong>Dispute ID:</strong> ${dispute.id}</p>
+      <p><strong>Status:</strong> ${dispute.status}</p>
+      <p><strong>Reason:</strong> ${dispute.reason}</p>
+      <p><strong>Amount:</strong> ${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}</p>
+      <p><strong>Charge ID:</strong> ${dispute.charge}</p>
+      <p><strong>Record ID:</strong> ${record._id}</p>
+      <p><strong>Hotel Name:</strong> ${record["Hotel Name"] || 'N/A'}</p>
+      <p><strong>Reservation ID:</strong> ${record["Reservation ID"] || 'N/A'}</p>
+      ${eventType === 'created' && dispute.evidence_details?.due_by 
+        ? `<p><strong>Evidence Due By:</strong> ${new Date(dispute.evidence_details.due_by * 1000).toLocaleDateString()}</p>`
+        : ''
+      }
+      <p>Please review this dispute in your Stripe dashboard and take appropriate action.</p>
+    `;
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER || "your-email@gmail.com",
+      to: process.env.DISPUTE_NOTIFICATION_EMAIL || process.env.EMAIL_USER || "your-email@gmail.com",
+      subject: subject,
+      html: emailBody,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log(`Dispute notification email sent for ${dispute.id}`);
+  } catch (error) {
+    console.error(`Failed to send dispute notification: ${error.message}`);
+  }
+};
+
+/**
+ * Upload file to use as dispute evidence
+ * POST /api/stripe/upload-evidence
+ */
+const uploadDisputeEvidence = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        status: "error",
+        message: "No file uploaded"
+      });
+    }
+
+    const file = await stripe.files.create({
+      purpose: 'dispute_evidence',
+      file: {
+        data: fs.readFileSync(req.file.path),
+        name: req.file.originalname,
+        type: req.file.mimetype,
+      },
+    });
+
+    // Clean up uploaded file
+    fs.unlinkSync(req.file.path);
+
+    res.status(200).json({
+      status: "success",
+      message: "Evidence file uploaded successfully",
+      data: {
+        fileId: file.id,
+        filename: file.filename,
+        purpose: file.purpose,
+        size: file.size,
+        type: file.type,
+        url: file.url
+      }
+    });
+  } catch (error) {
+    console.error("Failed to upload dispute evidence:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to upload evidence file",
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Submit dispute evidence
+ * POST /api/stripe/submit-evidence
+ */
+const submitDisputeEvidence = async (req, res) => {
+  try {
+    const {
+      disputeId,
+      evidence,
+      metadata
+    } = req.body;
+
+    if (!disputeId) {
+      return res.status(400).json({
+        status: "error",
+        message: "Dispute ID is required"
+      });
+    }
+
+    // Update the dispute with evidence
+    const updatedDispute = await stripe.disputes.update(disputeId, {
+      evidence: evidence || {},
+      metadata: metadata || {}
+    });
+
+    // Update our database record
+    const record = await StripeExcelData.findOne({
+      stripeDisputeId: disputeId
+    });
+
+    if (record) {
+      await StripeExcelData.findByIdAndUpdate(record._id, {
+        stripeDisputeEvidenceSubmitted: true,
+        stripeDisputeEvidenceDetails: updatedDispute.evidence_details || {},
+        stripeDisputeMetadata: updatedDispute.metadata || {}
+      });
+    }
+
+    res.status(200).json({
+      status: "success",
+      message: "Dispute evidence submitted successfully",
+      data: {
+        dispute: updatedDispute
+      }
+    });
+  } catch (error) {
+    console.error("Failed to submit dispute evidence:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to submit dispute evidence",
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Get dispute details
+ * GET /api/stripe/dispute/:disputeId
+ */
+const getDisputeDetails = async (req, res) => {
+  try {
+    const { disputeId } = req.params;
+
+    if (!disputeId) {
+      return res.status(400).json({
+        status: "error",
+        message: "Dispute ID is required"
+      });
+    }
+
+    // Get dispute from Stripe
+    const dispute = await stripe.disputes.retrieve(disputeId);
+
+    // Get our database record
+    const record = await StripeExcelData.findOne({
+      stripeDisputeId: disputeId
+    });
+
+    res.status(200).json({
+      status: "success",
+      message: "Dispute details retrieved successfully",
+      data: {
+        dispute: dispute,
+        record: record
+      }
+    });
+  } catch (error) {
+    console.error("Failed to get dispute details:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to get dispute details",
+      error: error.message
+    });
+  }
+};
+
+/**
+ * List all disputes with filtering
+ * GET /api/stripe/disputes
+ */
+const listDisputes = async (req, res) => {
+  try {
+    const { 
+      limit = 10, 
+      starting_after, 
+      ending_before,
+      charge,
+      payment_intent,
+      created 
+    } = req.query;
+
+    const params = {
+      limit: parseInt(limit)
+    };
+
+    if (starting_after) params.starting_after = starting_after;
+    if (ending_before) params.ending_before = ending_before;
+    if (charge) params.charge = charge;
+    if (payment_intent) params.payment_intent = payment_intent;
+    if (created) params.created = created;
+
+    const disputes = await stripe.disputes.list(params);
+
+    res.status(200).json({
+      status: "success",
+      message: "Disputes retrieved successfully",
+      data: disputes
+    });
+  } catch (error) {
+    console.error("Failed to list disputes:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to list disputes",
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createAccount,
   listAccounts,
@@ -1408,4 +1800,9 @@ module.exports = {
   getStripeSettings,
   updateStripeSettings,
   processStripeRefund,
+  handleStripeWebhook,
+  uploadDisputeEvidence,
+  submitDisputeEvidence,
+  getDisputeDetails,
+  listDisputes,
 };

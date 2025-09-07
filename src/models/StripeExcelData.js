@@ -236,6 +236,59 @@ const stripeExcelDataSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    // Stripe Dispute Fields
+    stripeDisputeId: {
+      type: String,
+      default: null,
+    },
+    stripeDisputeStatus: {
+      type: String, // warning_needs_response, warning_under_review, warning_closed, needs_response, under_review, charge_refunded, won, lost
+      default: null,
+    },
+    stripeDisputeReason: {
+      type: String, // duplicate, fraudulent, subscription_canceled, product_unacceptable, product_not_received, unrecognized, credit_not_processed, general, incorrect_account_details, insufficient_funds, bank_cannot_process, debit_not_authorized, customer_initiated
+      default: null,
+    },
+    stripeDisputeAmount: {
+      type: Number,
+      default: null,
+    },
+    stripeDisputeCurrency: {
+      type: String,
+      default: null,
+    },
+    stripeDisputeCreatedAt: {
+      type: Date,
+      default: null,
+    },
+    stripeDisputeEvidenceDueBy: {
+      type: Date,
+      default: null,
+    },
+    stripeDisputeEvidenceSubmitted: {
+      type: Boolean,
+      default: false,
+    },
+    stripeDisputeEvidenceDetails: {
+      type: Object,
+      default: {},
+    },
+    stripeDisputeMetadata: {
+      type: Object,
+      default: {},
+    },
+    stripeDisputeNetworkReasonCode: {
+      type: String,
+      default: null,
+    },
+    stripeDisputeIsChargeRefundable: {
+      type: Boolean,
+      default: null,
+    },
+    stripeDisputeBalanceTransactions: {
+      type: [String], // Array of balance transaction IDs
+      default: [],
+    },
     otaId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "OTA",

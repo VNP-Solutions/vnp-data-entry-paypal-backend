@@ -13,6 +13,43 @@ const paypalController = require("./src/controllers/paypal-integration");
 const stripeController = require("./src/controllers/stripe-controller");
 const otaController = require("./src/controllers/ota-controller");
 const { authenticateToken } = require("./src/middleware/auth");
+const multer = require("multer");
+
+// Configure multer for file uploads (for dispute evidence)
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, path.join(__dirname, "public", "temp"));
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + "-" + file.originalname);
+  },
+});
+
+const uploadEvidence = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: function (req, file, cb) {
+    // Allow common document types for dispute evidence
+    const allowedTypes = [
+      "application/pdf",
+      "image/jpeg",
+      "image/jpg",
+      "image/png",
+      "image/gif",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "text/plain",
+    ];
+    
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Invalid file type for dispute evidence"), false);
+    }
+  },
+});
 
 // Import database connection
 const connectDB = require("./src/config/database");
@@ -67,6 +104,13 @@ app.use(requestLogger);
 // Enable CORS
 app.use(cors());
 
+// Stripe webhook endpoint (must be before express.json() middleware)
+app.post(
+  "/api/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  stripeController.handleStripeWebhook
+);
+
 // Enable JSON parsing for request bodies
 app.use(express.json());
 
@@ -76,6 +120,10 @@ app.use(express.static(path.join(__dirname, "public")));
 // Ensure the files directory exists
 const filesDir = path.join(__dirname, "public", "files");
 fs.ensureDirSync(filesDir);
+
+// Ensure the temp directory exists for dispute evidence uploads
+const tempDir = path.join(__dirname, "public", "temp");
+fs.ensureDirSync(tempDir);
 
 // Authentication Routes
 app.post("/api/auth/register", authController.register);
@@ -248,6 +296,29 @@ app.put(
   "/api/stripe/settings",
   authenticateToken,
   stripeController.updateStripeSettings
+);
+
+// Stripe Dispute API Routes (protected)
+app.get(
+  "/api/stripe/disputes",
+  authenticateToken,
+  stripeController.listDisputes
+);
+app.get(
+  "/api/stripe/dispute/:disputeId",
+  authenticateToken,
+  stripeController.getDisputeDetails
+);
+app.post(
+  "/api/stripe/upload-evidence",
+  authenticateToken,
+  uploadEvidence.single("evidence"),
+  stripeController.uploadDisputeEvidence
+);
+app.post(
+  "/api/stripe/submit-evidence",
+  authenticateToken,
+  stripeController.submitDisputeEvidence
 );
 
 // OTA API Routes (protected)
