@@ -4,6 +4,7 @@ const ExcelData = require("../models/ExcelData");
 const { encryptCardData } = require("../utils/encryption");
 const nodemailer = require("nodemailer");
 const StripeExcelData = require("../models/StripeExcelData");
+const DisputeModel = require("../models/DisputeModel");
 const fs = require("fs");
 const path = require("path");
 
@@ -1458,14 +1459,18 @@ const handleDisputeCreated = async (dispute) => {
   console.log(`New dispute created: ${dispute.id}`);
   
   try {
-    // Find the record by charge ID
-    const record = await StripeExcelData.findOne({
+    // Find the original payment record by charge ID
+    const paymentRecord = await StripeExcelData.findOne({
       stripeLatestChargeId: dispute.charge
     });
 
-    if (record) {
-      // Update record with dispute information
-      await StripeExcelData.findByIdAndUpdate(record._id, {
+    if (paymentRecord) {
+      // Create new dispute record
+      const disputeRecord = await DisputeModel.create({
+        stripeExcelDataId: paymentRecord._id,
+        userId: paymentRecord.userId,
+        stripePaymentIntentId: paymentRecord.stripePaymentIntentId,
+        stripeLatestChargeId: dispute.charge,
         stripeDisputeId: dispute.id,
         stripeDisputeStatus: dispute.status,
         stripeDisputeReason: dispute.reason,
@@ -1477,16 +1482,28 @@ const handleDisputeCreated = async (dispute) => {
         stripeDisputeIsChargeRefundable: dispute.is_charge_refundable,
         stripeDisputeBalanceTransactions: dispute.balance_transactions?.map(bt => bt.id) || [],
         stripeDisputeMetadata: dispute.metadata || {},
+        // Copy hotel information for quick access
+        hotelName: paymentRecord["Hotel Name"],
+        reservationId: paymentRecord["Reservation ID"],
+        guestName: paymentRecord.Name,
+        checkIn: paymentRecord["Check In"],
+        checkOut: paymentRecord["Check Out"],
+        connectedAccount: paymentRecord["Connected Account"],
+        internalStatus: "new"
+      });
+
+      // Update original payment record status
+      await StripeExcelData.findByIdAndUpdate(paymentRecord._id, {
         "Charge status": "Disputed",
         Status: "Payment Disputed"
       });
 
-      console.log(`Updated record ${record._id} with dispute information`);
+      console.log(`Created dispute record ${disputeRecord._id} for payment ${paymentRecord._id}`);
 
       // Send email notification about dispute
-      await sendDisputeNotification(record, dispute, 'created');
+      await sendDisputeNotification(paymentRecord, dispute, 'created');
     } else {
-      console.log(`No record found for charge: ${dispute.charge}`);
+      console.log(`No payment record found for charge: ${dispute.charge}`);
     }
   } catch (error) {
     console.error(`Error handling dispute created: ${error.message}`);
@@ -1501,12 +1518,12 @@ const handleDisputeUpdated = async (dispute) => {
   console.log(`Dispute updated: ${dispute.id}`);
   
   try {
-    const record = await StripeExcelData.findOne({
+    const disputeRecord = await DisputeModel.findOne({
       stripeDisputeId: dispute.id
     });
 
-    if (record) {
-      await StripeExcelData.findByIdAndUpdate(record._id, {
+    if (disputeRecord) {
+      await DisputeModel.findByIdAndUpdate(disputeRecord._id, {
         stripeDisputeStatus: dispute.status,
         stripeDisputeEvidenceDueBy: dispute.evidence_details?.due_by ? new Date(dispute.evidence_details.due_by * 1000) : null,
         stripeDisputeEvidenceSubmitted: dispute.evidence_details?.submission_count > 0,
@@ -1515,6 +1532,8 @@ const handleDisputeUpdated = async (dispute) => {
       });
 
       console.log(`Updated dispute ${dispute.id} information`);
+    } else {
+      console.log(`No dispute record found for dispute ID: ${dispute.id}`);
     }
   } catch (error) {
     console.error(`Error handling dispute updated: ${error.message}`);
@@ -1529,13 +1548,14 @@ const handleDisputeClosed = async (dispute) => {
   console.log(`Dispute ${dispute.id} closed with status: ${dispute.status}`);
   
   try {
-    const record = await StripeExcelData.findOne({
+    const disputeRecord = await DisputeModel.findOne({
       stripeDisputeId: dispute.id
     });
 
-    if (record) {
+    if (disputeRecord) {
       let chargeStatus = "Disputed";
       let recordStatus = "Payment Disputed";
+      let internalStatus = "resolved";
 
       // Update status based on dispute outcome
       if (dispute.status === 'won') {
@@ -1549,16 +1569,27 @@ const handleDisputeClosed = async (dispute) => {
         recordStatus = "Dispute Resolved - Refunded";
       }
 
-      await StripeExcelData.findByIdAndUpdate(record._id, {
+      // Update dispute record
+      await DisputeModel.findByIdAndUpdate(disputeRecord._id, {
         stripeDisputeStatus: dispute.status,
+        internalStatus: internalStatus
+      });
+
+      // Update original payment record
+      await StripeExcelData.findByIdAndUpdate(disputeRecord.stripeExcelDataId, {
         "Charge status": chargeStatus,
         Status: recordStatus
       });
 
-      console.log(`Updated record ${record._id} with final dispute status: ${dispute.status}`);
+      console.log(`Updated dispute ${disputeRecord._id} with final status: ${dispute.status}`);
 
+      // Get the original payment record for notification
+      const paymentRecord = await StripeExcelData.findById(disputeRecord.stripeExcelDataId);
+      
       // Send email notification about dispute resolution
-      await sendDisputeNotification(record, dispute, 'closed');
+      await sendDisputeNotification(paymentRecord, dispute, 'closed');
+    } else {
+      console.log(`No dispute record found for dispute ID: ${dispute.id}`);
     }
   } catch (error) {
     console.error(`Error handling dispute closed: ${error.message}`);
@@ -1679,15 +1710,16 @@ const submitDisputeEvidence = async (req, res) => {
     });
 
     // Update our database record
-    const record = await StripeExcelData.findOne({
+    const disputeRecord = await DisputeModel.findOne({
       stripeDisputeId: disputeId
     });
 
-    if (record) {
-      await StripeExcelData.findByIdAndUpdate(record._id, {
+    if (disputeRecord) {
+      await DisputeModel.findByIdAndUpdate(disputeRecord._id, {
         stripeDisputeEvidenceSubmitted: true,
         stripeDisputeEvidenceDetails: updatedDispute.evidence_details || {},
-        stripeDisputeMetadata: updatedDispute.metadata || {}
+        stripeDisputeMetadata: updatedDispute.metadata || {},
+        internalStatus: "evidence_submitted"
       });
     }
 
@@ -1726,17 +1758,18 @@ const getDisputeDetails = async (req, res) => {
     // Get dispute from Stripe
     const dispute = await stripe.disputes.retrieve(disputeId);
 
-    // Get our database record
-    const record = await StripeExcelData.findOne({
+    // Get our database record with populated payment data
+    const disputeRecord = await DisputeModel.findOne({
       stripeDisputeId: disputeId
-    });
+    }).populate('stripeExcelDataId');
 
     res.status(200).json({
       status: "success",
       message: "Dispute details retrieved successfully",
       data: {
         dispute: dispute,
-        record: record
+        disputeRecord: disputeRecord,
+        paymentRecord: disputeRecord?.stripeExcelDataId || null
       }
     });
   } catch (error) {
@@ -1757,6 +1790,12 @@ const listDisputes = async (req, res) => {
   try {
     const { 
       limit = 10, 
+      page = 1,
+      status,
+      reason,
+      userId,
+      hotelName,
+      internalStatus,
       starting_after, 
       ending_before,
       charge,
@@ -1764,28 +1803,231 @@ const listDisputes = async (req, res) => {
       created 
     } = req.query;
 
-    const params = {
+    // Build database query for our dispute records
+    const dbQuery = {};
+    if (userId) dbQuery.userId = userId;
+    if (status) dbQuery.stripeDisputeStatus = status;
+    if (reason) dbQuery.stripeDisputeReason = reason;
+    if (internalStatus) dbQuery.internalStatus = internalStatus;
+    if (hotelName) dbQuery.hotelName = new RegExp(hotelName, 'i');
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Get disputes from our database with populated payment data
+    const disputeRecords = await DisputeModel.find(dbQuery)
+      .populate('stripeExcelDataId')
+      .sort({ stripeDisputeCreatedAt: -1 })
+      .skip(skip)
+      .limit(limitNum);
+
+    const totalCount = await DisputeModel.countDocuments(dbQuery);
+
+    // Also get Stripe disputes for comparison/sync
+    const stripeParams = {
       limit: parseInt(limit)
     };
 
-    if (starting_after) params.starting_after = starting_after;
-    if (ending_before) params.ending_before = ending_before;
-    if (charge) params.charge = charge;
-    if (payment_intent) params.payment_intent = payment_intent;
-    if (created) params.created = created;
+    if (starting_after) stripeParams.starting_after = starting_after;
+    if (ending_before) stripeParams.ending_before = ending_before;
+    if (charge) stripeParams.charge = charge;
+    if (payment_intent) stripeParams.payment_intent = payment_intent;
+    if (created) stripeParams.created = created;
 
-    const disputes = await stripe.disputes.list(params);
+    const stripeDisputes = await stripe.disputes.list(stripeParams);
 
     res.status(200).json({
       status: "success",
       message: "Disputes retrieved successfully",
-      data: disputes
+      data: {
+        disputeRecords: disputeRecords,
+        stripeDisputes: stripeDisputes,
+        pagination: {
+          current_page: pageNum,
+          limit: limitNum,
+          total_count: totalCount,
+          total_pages: Math.ceil(totalCount / limitNum),
+          has_more: skip + limitNum < totalCount
+        },
+        filters: {
+          applied: {
+            userId,
+            status,
+            reason,
+            internalStatus,
+            hotelName
+          }
+        }
+      }
     });
   } catch (error) {
     console.error("Failed to list disputes:", error);
     res.status(500).json({
       status: "error",
       message: "Failed to list disputes",
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Update dispute internal status and notes
+ * PUT /api/stripe/dispute/:disputeId/status
+ */
+const updateDisputeStatus = async (req, res) => {
+  try {
+    const { disputeId } = req.params;
+    const { internalStatus, disputeResolutionNotes, assignedTo } = req.body;
+
+    if (!disputeId) {
+      return res.status(400).json({
+        status: "error",
+        message: "Dispute ID is required"
+      });
+    }
+
+    const updateData = {};
+    if (internalStatus) updateData.internalStatus = internalStatus;
+    if (disputeResolutionNotes) updateData.disputeResolutionNotes = disputeResolutionNotes;
+    if (assignedTo) updateData.assignedTo = assignedTo;
+    if (req.user?.id) updateData.lastUpdatedBy = req.user.id;
+
+    const updatedDispute = await DisputeModel.findOneAndUpdate(
+      { stripeDisputeId: disputeId },
+      updateData,
+      { new: true }
+    ).populate('stripeExcelDataId');
+
+    if (!updatedDispute) {
+      return res.status(404).json({
+        status: "error",
+        message: "Dispute not found"
+      });
+    }
+
+    res.status(200).json({
+      status: "success",
+      message: "Dispute status updated successfully",
+      data: {
+        dispute: updatedDispute
+      }
+    });
+  } catch (error) {
+    console.error("Failed to update dispute status:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to update dispute status",
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Get dispute statistics
+ * GET /api/stripe/disputes/stats
+ */
+const getDisputeStats = async (req, res) => {
+  try {
+    const { userId, startDate, endDate } = req.query;
+
+    const matchQuery = {};
+    if (userId) matchQuery.userId = userId;
+    if (startDate || endDate) {
+      matchQuery.stripeDisputeCreatedAt = {};
+      if (startDate) matchQuery.stripeDisputeCreatedAt.$gte = new Date(startDate);
+      if (endDate) matchQuery.stripeDisputeCreatedAt.$lte = new Date(endDate);
+    }
+
+    const stats = await DisputeModel.aggregate([
+      { $match: matchQuery },
+      {
+        $group: {
+          _id: null,
+          totalDisputes: { $sum: 1 },
+          totalAmount: { $sum: "$stripeDisputeAmount" },
+          statusBreakdown: {
+            $push: {
+              status: "$stripeDisputeStatus",
+              amount: "$stripeDisputeAmount"
+            }
+          },
+          reasonBreakdown: {
+            $push: {
+              reason: "$stripeDisputeReason",
+              amount: "$stripeDisputeAmount"
+            }
+          },
+          internalStatusBreakdown: {
+            $push: {
+              status: "$internalStatus",
+              amount: "$stripeDisputeAmount"
+            }
+          }
+        }
+      }
+    ]);
+
+    // Process breakdown data
+    const result = stats[0] || {
+      totalDisputes: 0,
+      totalAmount: 0,
+      statusBreakdown: [],
+      reasonBreakdown: [],
+      internalStatusBreakdown: []
+    };
+
+    // Group by status
+    const statusStats = {};
+    result.statusBreakdown.forEach(item => {
+      if (!statusStats[item.status]) {
+        statusStats[item.status] = { count: 0, amount: 0 };
+      }
+      statusStats[item.status].count++;
+      statusStats[item.status].amount += item.amount;
+    });
+
+    // Group by reason
+    const reasonStats = {};
+    result.reasonBreakdown.forEach(item => {
+      if (!reasonStats[item.reason]) {
+        reasonStats[item.reason] = { count: 0, amount: 0 };
+      }
+      reasonStats[item.reason].count++;
+      reasonStats[item.reason].amount += item.amount;
+    });
+
+    // Group by internal status
+    const internalStatusStats = {};
+    result.internalStatusBreakdown.forEach(item => {
+      if (!internalStatusStats[item.status]) {
+        internalStatusStats[item.status] = { count: 0, amount: 0 };
+      }
+      internalStatusStats[item.status].count++;
+      internalStatusStats[item.status].amount += item.amount;
+    });
+
+    res.status(200).json({
+      status: "success",
+      message: "Dispute statistics retrieved successfully",
+      data: {
+        summary: {
+          totalDisputes: result.totalDisputes,
+          totalAmount: result.totalAmount,
+          averageAmount: result.totalDisputes > 0 ? result.totalAmount / result.totalDisputes : 0
+        },
+        breakdowns: {
+          byStatus: statusStats,
+          byReason: reasonStats,
+          byInternalStatus: internalStatusStats
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Failed to get dispute statistics:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Failed to get dispute statistics",
       error: error.message
     });
   }
@@ -1805,4 +2047,6 @@ module.exports = {
   submitDisputeEvidence,
   getDisputeDetails,
   listDisputes,
+  updateDisputeStatus,
+  getDisputeStats,
 };

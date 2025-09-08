@@ -304,10 +304,21 @@ app.get(
   authenticateToken,
   stripeController.listDisputes
 );
+
+app.get(
+  "/api/stripe/disputes/stats",
+  authenticateToken,
+  stripeController.getDisputeStats
+);
 app.get(
   "/api/stripe/dispute/:disputeId",
   authenticateToken,
   stripeController.getDisputeDetails
+);
+app.put(
+  "/api/stripe/dispute/:disputeId/status",
+  authenticateToken,
+  stripeController.updateDisputeStatus
 );
 app.post(
   "/api/stripe/upload-evidence",
