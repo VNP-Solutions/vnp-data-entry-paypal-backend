@@ -1788,71 +1788,80 @@ const getDisputeDetails = async (req, res) => {
  */
 const listDisputes = async (req, res) => {
   try {
-    const { 
-      limit = 10, 
+    const {
+      limit = 10,
       page = 1,
       status,
       reason,
-      userId,
-      hotelName,
       internalStatus,
-      starting_after, 
-      ending_before,
-      charge,
-      payment_intent,
-      created 
+      hotelName,
+      starting_after,
+      ending_before
     } = req.query;
-
-    // Build database query for our dispute records
-    const dbQuery = {};
-    if (userId) dbQuery.userId = userId;
-    if (status) dbQuery.stripeDisputeStatus = status;
-    if (reason) dbQuery.stripeDisputeReason = reason;
-    if (internalStatus) dbQuery.internalStatus = internalStatus;
-    if (hotelName) dbQuery.hotelName = new RegExp(hotelName, 'i');
 
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
-    const skip = (pageNum - 1) * limitNum;
 
-    // Get disputes from our database with populated payment data
-    const disputeRecords = await DisputeModel.find(dbQuery)
-      .populate('stripeExcelDataId')
-      .sort({ stripeDisputeCreatedAt: -1 })
-      .skip(skip)
-      .limit(limitNum);
-
-    const totalCount = await DisputeModel.countDocuments(dbQuery);
-
-    // Also get Stripe disputes for comparison/sync
+    // Build Stripe API parameters for filtering
     const stripeParams = {
-      limit: parseInt(limit)
+      limit: limitNum
     };
 
     if (starting_after) stripeParams.starting_after = starting_after;
     if (ending_before) stripeParams.ending_before = ending_before;
-    if (charge) stripeParams.charge = charge;
-    if (payment_intent) stripeParams.payment_intent = payment_intent;
-    if (created) stripeParams.created = created;
 
-    const stripeDisputes = await stripe.disputes.list(stripeParams);
+    // Get ALL disputes from Stripe first (we'll filter client-side)
+    const stripeDisputes = await stripe.disputes.list({
+      limit: 100, // Get more to allow for filtering
+      ...stripeParams
+    });
+
+    // Filter disputes based on frontend parameters
+    let filteredDisputes = stripeDisputes.data;
+
+    if (status && status !== 'all') {
+      filteredDisputes = filteredDisputes.filter(dispute => dispute.status === status);
+    }
+
+    if (reason && reason !== 'all') {
+      filteredDisputes = filteredDisputes.filter(dispute => dispute.reason === reason);
+    }
+
+    // Note: hotelName and internalStatus filtering would require database lookup
+    // For now, we'll focus on Stripe-native filters (status, reason)
+
+    // Apply pagination to filtered results
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedDisputes = filteredDisputes.slice(startIndex, endIndex);
+
+    // Also get our database records for additional context
+    const disputeRecords = await DisputeModel.find({})
+      .populate('stripeExcelDataId')
+      .sort({ stripeDisputeCreatedAt: -1 })
+      .limit(100); // Limit to avoid performance issues
 
     res.status(200).json({
       status: "success",
       message: "Disputes retrieved successfully",
       data: {
         disputeRecords: disputeRecords,
-        stripeDisputes: stripeDisputes,
+        stripeDisputes: {
+          object: stripeDisputes.object,
+          data: paginatedDisputes,
+          has_more: endIndex < filteredDisputes.length,
+          count: filteredDisputes.length,
+          url: stripeDisputes.url
+        },
         pagination: {
           current_page: pageNum,
           limit: limitNum,
-          total_count: totalCount,
-          total_pages: Math.ceil(totalCount / limitNum),
-          has_more: skip + limitNum < totalCount
+          total_count: filteredDisputes.length,
+          total_pages: Math.ceil(filteredDisputes.length / limitNum),
+          has_more: endIndex < filteredDisputes.length
         },
         filters: {
           applied: {
-            userId,
             status,
             reason,
             internalStatus,
@@ -1871,57 +1880,6 @@ const listDisputes = async (req, res) => {
   }
 };
 
-/**
- * Update dispute internal status and notes
- * PUT /api/stripe/dispute/:disputeId/status
- */
-const updateDisputeStatus = async (req, res) => {
-  try {
-    const { disputeId } = req.params;
-    const { internalStatus, disputeResolutionNotes, assignedTo } = req.body;
-
-    if (!disputeId) {
-      return res.status(400).json({
-        status: "error",
-        message: "Dispute ID is required"
-      });
-    }
-
-    const updateData = {};
-    if (internalStatus) updateData.internalStatus = internalStatus;
-    if (disputeResolutionNotes) updateData.disputeResolutionNotes = disputeResolutionNotes;
-    if (assignedTo) updateData.assignedTo = assignedTo;
-    if (req.user?.id) updateData.lastUpdatedBy = req.user.id;
-
-    const updatedDispute = await DisputeModel.findOneAndUpdate(
-      { stripeDisputeId: disputeId },
-      updateData,
-      { new: true }
-    ).populate('stripeExcelDataId');
-
-    if (!updatedDispute) {
-      return res.status(404).json({
-        status: "error",
-        message: "Dispute not found"
-      });
-    }
-
-    res.status(200).json({
-      status: "success",
-      message: "Dispute status updated successfully",
-      data: {
-        dispute: updatedDispute
-      }
-    });
-  } catch (error) {
-    console.error("Failed to update dispute status:", error);
-    res.status(500).json({
-      status: "error",
-      message: "Failed to update dispute status",
-      error: error.message
-    });
-  }
-};
 
 /**
  * Get dispute statistics
@@ -2047,6 +2005,5 @@ module.exports = {
   submitDisputeEvidence,
   getDisputeDetails,
   listDisputes,
-  updateDisputeStatus,
   getDisputeStats,
 };

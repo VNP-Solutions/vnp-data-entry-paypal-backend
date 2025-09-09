@@ -315,11 +315,6 @@ app.get(
   authenticateToken,
   stripeController.getDisputeDetails
 );
-app.put(
-  "/api/stripe/dispute/:disputeId/status",
-  authenticateToken,
-  stripeController.updateDisputeStatus
-);
 app.post(
   "/api/stripe/upload-evidence",
   authenticateToken,
