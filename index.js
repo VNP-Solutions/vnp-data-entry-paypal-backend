@@ -106,7 +106,7 @@ app.use(cors());
 
 // Stripe webhook endpoint (must be before express.json() middleware)
 app.post(
-  "/api/stripe/webhook",
+  "/webhook",
   express.raw({ type: "application/json" }),
   stripeController.handleStripeWebhook
 );
