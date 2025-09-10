@@ -64,6 +64,10 @@ const disputeSchema = new mongoose.Schema(
       type: Object,
       default: {},
     },
+    stripeDisputeEvidenceFileId: {
+      type: String,
+      default: null,
+    },
     stripeDisputeNetworkReasonCode: {
       type: String,
       default: null,
@@ -83,7 +87,13 @@ const disputeSchema = new mongoose.Schema(
     },
     internalStatus: {
       type: String,
-      enum: ["new", "investigating", "evidence_submitted", "awaiting_response", "resolved"],
+      enum: [
+        "new",
+        "investigating",
+        "evidence_submitted",
+        "awaiting_response",
+        "resolved",
+      ],
       default: "new",
     },
     assignedTo: {
@@ -137,14 +147,14 @@ disputeSchema.index({ stripeDisputeCreatedAt: 1 });
 disputeSchema.index({ internalStatus: 1 });
 
 // Virtual to get the original payment record
-disputeSchema.virtual('originalPayment', {
-  ref: 'StripeExcelData',
-  localField: 'stripeExcelDataId',
-  foreignField: '_id',
-  justOne: true
+disputeSchema.virtual("originalPayment", {
+  ref: "StripeExcelData",
+  localField: "stripeExcelDataId",
+  foreignField: "_id",
+  justOne: true,
 });
 
 // Ensure virtual fields are serialized
-disputeSchema.set('toJSON', { virtuals: true });
+disputeSchema.set("toJSON", { virtuals: true });
 
 module.exports = mongoose.model("Dispute", disputeSchema);

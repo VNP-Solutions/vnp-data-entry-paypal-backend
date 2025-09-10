@@ -42,7 +42,7 @@ const uploadEvidence = multer({
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "text/plain",
     ];
-    
+
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
@@ -324,6 +324,7 @@ app.post(
 app.post(
   "/api/stripe/submit-evidence",
   authenticateToken,
+  uploadEvidence.single("evidence"),
   stripeController.submitDisputeEvidence
 );
 
