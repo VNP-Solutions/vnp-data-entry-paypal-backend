@@ -1,7 +1,7 @@
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const StripeSetting = require("../models/StripeSetting");
 const ExcelData = require("../models/ExcelData");
-const { encryptCardData } = require("../utils/encryption");
+const { encryptCardData, decryptCardData } = require("../utils/encryption");
 const nodemailer = require("nodemailer");
 const StripeExcelData = require("../models/StripeExcelData");
 const DisputeModel = require("../models/DisputeModel");
@@ -864,10 +864,41 @@ const processStripePayment = async (req, res) => {
     const applicationFeeAmount =
       rawFeeCents >= 0 ? Math.trunc(rawFeeCents) : -Math.trunc(-rawFeeCents);
 
+    // const documentDetails = await StripeExcelData.findById(documentId);
+
+    // const rowEncryptedCardData = {
+    //   "Card Number": documentDetails["Card Number"],
+    //   "Card Expire": documentDetails["Card Expire"],
+    //   "Card CVV": documentDetails["Card CVV"],
+    // };
+
+    // const decryptedCardDetails = decryptCardData(rowEncryptedCardData);
+
+    // console.log(decryptedCardDetails);
+
+    // const cardNumber = decryptedCardDetails["Card Number"];
+    // const cardExpiryMonth = decryptedCardDetails["Card Expire"].split("-")[1];
+    // const cardExpiryYear = decryptedCardDetails["Card Expire"].split("-")[0];
+    // const cardCvv = decryptedCardDetails["Card CVV"];
+
+    // console.log(cardNumber, cardExpiryMonth, cardExpiryYear, cardCvv);
+
+    // const token = await stripe.tokens.create({
+    //   card: {
+    //     number: cardNumber,
+    //     exp_month: cardExpiryMonth,
+    //     exp_year: cardExpiryYear,
+    //     cvc: cardCvv,
+    //   },
+    // });
+
+    // console.log(token);
+    // return;
+
     const paymentIntent = await stripe.paymentIntents.create({
       amount: totalAmount,
       currency: currency || "usd",
-      payment_method: paymentMethod || "pm_card_visa",
+      payment_method: paymentMethod,
       confirm: true,
       application_fee_amount: applicationFeeAmount,
       transfer_data: {
