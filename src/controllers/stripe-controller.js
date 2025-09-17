@@ -1,7 +1,7 @@
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const StripeSetting = require("../models/StripeSetting");
 const ExcelData = require("../models/ExcelData");
-const { encryptCardData } = require("../utils/encryption");
+const { encryptCardData, decryptCardData } = require("../utils/encryption");
 const nodemailer = require("nodemailer");
 const StripeExcelData = require("../models/StripeExcelData");
 const DisputeModel = require("../models/DisputeModel");
@@ -100,8 +100,6 @@ const processDirectPayment = async (paymentData) => {
         ? "https://api-m.paypal.com" // Production
         : "https://api-m.sandbox.paypal.com"; // Sandbox
 
-    console.log("Using PayPal base URL:", baseURL);
-
     // First get access token
     const tokenResponse = await fetch(`${baseURL}/v1/oauth2/token`, {
       method: "POST",
@@ -128,19 +126,13 @@ const processDirectPayment = async (paymentData) => {
       throw new Error("No access token received from PayPal");
     }
 
-    console.log("Successfully obtained PayPal access token");
+    console.info("Successfully obtained PayPal access token");
 
     // Step 1: Create the order using direct API
     const createOrderEndpoint = `${baseURL}/v2/checkout/orders`;
     const orderRequestId = `order-${documentId}-${Date.now()}-${Math.random()
       .toString(36)
       .substr(2, 9)}`;
-
-    console.log("Create Order endpoint:", createOrderEndpoint);
-    console.log(
-      "Create Order request body:",
-      JSON.stringify(requestBody, null, 2)
-    );
 
     const createResponse = await fetch(createOrderEndpoint, {
       method: "POST",
@@ -173,8 +165,6 @@ const processDirectPayment = async (paymentData) => {
     }
 
     const jsonResponse = await createResponse.json();
-    console.log("Order created successfully");
-    console.log("Order response:", JSON.stringify(jsonResponse, null, 2));
 
     return { jsonResponse, httpStatusCode };
   } catch (error) {
@@ -334,7 +324,6 @@ const createAccount = async (req, res) => {
     };
 
     const account = await createConnectAccount(accountData);
-    console.log(account);
     // Extract important account details
     const accountDetails = {
       id: account.id,
@@ -783,9 +772,6 @@ const deleteAccount = async (req, res) => {
 };
 
 const createSinglePayment = async (req, res) => {
-  console.log("Processing payment via /api/stripe/payment endpoint");
-  console.log(req.body);
-
   try {
     const {
       amount,
@@ -836,13 +822,22 @@ const createSinglePayment = async (req, res) => {
 // Stripe Payment Processing
 const processStripePayment = async (req, res) => {
   try {
-    const { totalAmount, currency, paymentMethod, accountId, documentId } =
+    const { totalAmount, currency, paymentMethodId, accountId, documentId } =
       req.body;
 
-    if (!totalAmount || !accountId) {
+    if (!totalAmount || !accountId || !paymentMethodId) {
       return res.status(400).json({
         status: "error",
-        message: "totalAmount and accountId are required for Stripe payments",
+        message: "totalAmount, accountId, and paymentMethodId are required for Stripe payments",
+      });
+    }
+
+    const details = await StripeExcelData.findById(documentId);
+    
+    if (!details) {
+      return res.status(404).json({
+        status: "error",
+        message: "Document not found",
       });
     }
 
@@ -857,7 +852,6 @@ const processStripePayment = async (req, res) => {
       // If settings read fails, proceed with default ratio
     }
 
-    // const applicationFeeAmount = Math.round(Number(totalAmount) * (vnpRatio / 100));
     // Compute application fee in cents without rounding (truncate fractional cents)
     const totalAmountCents = Number(totalAmount) || 0; // totalAmount is expected in cents
     const rawFeeCents = (totalAmountCents * (Number(vnpRatio) || 0)) / 100;
@@ -867,7 +861,7 @@ const processStripePayment = async (req, res) => {
     const paymentIntent = await stripe.paymentIntents.create({
       amount: totalAmount,
       currency: currency || "usd",
-      payment_method: paymentMethod || "pm_card_visa",
+      payment_method: paymentMethodId, // Use the secure payment method ID from frontend
       confirm: true,
       application_fee_amount: applicationFeeAmount,
       transfer_data: {
@@ -934,9 +928,6 @@ const processStripePayment = async (req, res) => {
             `StripeExcelData record not found for documentId: ${documentId}`
           );
         } else {
-          console.log(
-            `Database updated successfully for documentId ${documentId} with status: ${chargeStatus}`
-          );
         }
       } catch (dbError) {
         console.error("Database update error:", dbError);
@@ -1164,9 +1155,6 @@ const processPayPalPayment = async (req, res) => {
               `ExcelData record not found for documentId: ${documentId}`
             );
           } else {
-            console.log(
-              `Database updated successfully for documentId ${documentId} with status: Charged`
-            );
           }
         } catch (dbError) {
           console.error("Database update error:", dbError);
@@ -1418,11 +1406,8 @@ const handleStripeWebhook = async (req, res) => {
     // Verify webhook signature
     event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
   } catch (err) {
-    console.log(`Webhook signature verification failed: ${err.message}`);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
-
-  console.log(`Received webhook event: ${event.type}`);
 
   try {
     // Handle dispute events
@@ -1440,7 +1425,6 @@ const handleStripeWebhook = async (req, res) => {
         break;
 
       default:
-        console.log(`Unhandled event type: ${event.type}`);
     }
 
     res.json({ received: true });
@@ -1458,8 +1442,6 @@ const handleStripeWebhook = async (req, res) => {
  * Handle dispute created event
  */
 const handleDisputeCreated = async (dispute) => {
-  console.log(`New dispute created: ${dispute.id}`);
-
   try {
     // Find the original payment record by charge ID
     const paymentRecord = await StripeExcelData.findOne({
@@ -1503,14 +1485,9 @@ const handleDisputeCreated = async (dispute) => {
         Status: "Payment Disputed",
       });
 
-      console.log(
-        `Created dispute record ${disputeRecord._id} for payment ${paymentRecord._id}`
-      );
-
       // Send email notification about dispute
       await sendDisputeNotification(paymentRecord, dispute, "created");
     } else {
-      console.log(`No payment record found for charge: ${dispute.charge}`);
     }
   } catch (error) {
     console.error(`Error handling dispute created: ${error.message}`);
@@ -1522,8 +1499,6 @@ const handleDisputeCreated = async (dispute) => {
  * Handle dispute updated event
  */
 const handleDisputeUpdated = async (dispute) => {
-  console.log(`Dispute updated: ${dispute.id}`);
-
   try {
     const disputeRecord = await DisputeModel.findOne({
       stripeDisputeId: dispute.id,
@@ -1540,10 +1515,7 @@ const handleDisputeUpdated = async (dispute) => {
         stripeDisputeEvidenceDetails: dispute.evidence_details || {},
         stripeDisputeMetadata: dispute.metadata || {},
       });
-
-      console.log(`Updated dispute ${dispute.id} information`);
     } else {
-      console.log(`No dispute record found for dispute ID: ${dispute.id}`);
     }
   } catch (error) {
     console.error(`Error handling dispute updated: ${error.message}`);
@@ -1555,8 +1527,6 @@ const handleDisputeUpdated = async (dispute) => {
  * Handle dispute closed event
  */
 const handleDisputeClosed = async (dispute) => {
-  console.log(`Dispute ${dispute.id} closed with status: ${dispute.status}`);
-
   try {
     const disputeRecord = await DisputeModel.findOne({
       stripeDisputeId: dispute.id,
@@ -1591,10 +1561,6 @@ const handleDisputeClosed = async (dispute) => {
         Status: recordStatus,
       });
 
-      console.log(
-        `Updated dispute ${disputeRecord._id} with final status: ${dispute.status}`
-      );
-
       // Get the original payment record for notification
       const paymentRecord = await StripeExcelData.findById(
         disputeRecord.stripeExcelDataId
@@ -1603,7 +1569,6 @@ const handleDisputeClosed = async (dispute) => {
       // Send email notification about dispute resolution
       await sendDisputeNotification(paymentRecord, dispute, "closed");
     } else {
-      console.log(`No dispute record found for dispute ID: ${dispute.id}`);
     }
   } catch (error) {
     console.error(`Error handling dispute closed: ${error.message}`);
@@ -1658,7 +1623,6 @@ const sendDisputeNotification = async (record, dispute, eventType) => {
     };
 
     await transporter.sendMail(mailOptions);
-    console.log(`Dispute notification email sent for ${dispute.id}`);
   } catch (error) {
     console.error(`Failed to send dispute notification: ${error.message}`);
   }
@@ -1732,10 +1696,6 @@ const submitDisputeEvidence = async (req, res) => {
     // If a file was uploaded, upload it to Stripe
     if (evidenceFile) {
       try {
-        console.log(
-          `Uploading evidence file to Stripe: ${evidenceFile.originalname}`
-        );
-
         // Read the file from the temporary location
         const fileBuffer = fs.readFileSync(evidenceFile.path);
 
@@ -1750,7 +1710,6 @@ const submitDisputeEvidence = async (req, res) => {
         });
 
         fileId = stripeFile.id;
-        console.log(`File uploaded to Stripe successfully: ${fileId}`);
 
         // Clean up temporary file
         fs.unlinkSync(evidenceFile.path);
