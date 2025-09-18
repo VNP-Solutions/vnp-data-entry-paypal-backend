@@ -786,11 +786,11 @@ const createSinglePayment = async (req, res) => {
       billingAddress,
       documentId,
       accountId,
-      paymentMethod,
+      paymentMethodId,
     } = req.body;
 
     // Determine payment method based on payload structure
-    const isStripePayment = !!(accountId && paymentMethod && totalAmount);
+    const isStripePayment = !!(accountId && totalAmount && paymentMethodId); ;
     const isPayPalPayment = !!(
       cardNumber &&
       cardExpiry &&
