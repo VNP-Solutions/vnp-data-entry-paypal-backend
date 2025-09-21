@@ -225,8 +225,8 @@ async function processFileInBackground(uploadSession, fileBuffer) {
             "Reservation ID": rowObject["Reservation ID"],
             "Hotel Confirmation Code": rowObject["Hotel Confirmation Code"],
             Name: rowObject["Name"],
-            "Check In": rowObject["Check In"],
-            "Check Out": rowObject["Check Out"],
+            "Check In": normalizeDateField(rowObject["Check In"]),
+            "Check Out": normalizeDateField(rowObject["Check Out"]),
             Curency: rowObject["Curency"],
             "Amount to charge": rowObject["Amount to charge"],
             "Charge status": rowObject["Charge status"],
@@ -249,6 +249,17 @@ async function processFileInBackground(uploadSession, fileBuffer) {
 
           // Encrypt sensitive data
           const encryptedData = encryptCardData(mappedData);
+
+          // Debug: Log what's being saved to database
+          console.log(
+            `\x1b[42m💾 DATABASE SAVE DEBUG - Check In:\x1b[0m`,
+            encryptedData["Check In"]
+          );
+          console.log(
+            `\x1b[43m💾 DATABASE SAVE DEBUG - Check Out:\x1b[0m`,
+            encryptedData["Check Out"]
+          );
+
           excelDataRecords.push(encryptedData);
         }
       }
@@ -327,6 +338,59 @@ async function processFileInBackground(uploadSession, fileBuffer) {
   } finally {
     session.endSession();
   }
+}
+
+// Simple date normalization function to fix timezone offset issue
+function normalizeDateField(dateValue) {
+  console.log(
+    `\x1b[33m🔍 DATE DEBUG - Input value:\x1b[0m`,
+    dateValue,
+    `\x1b[33mType:\x1b[0m`,
+    typeof dateValue
+  );
+
+  if (!dateValue) {
+    console.log(
+      `\x1b[31m❌ DATE DEBUG - Empty/null value, returning null\x1b[0m`
+    );
+    return null;
+  }
+
+  // If it's a number (Excel date serial), convert to YYYY-MM-DD with timezone fix
+  if (!isNaN(dateValue) && dateValue !== "" && dateValue !== null) {
+    const serial = Number(dateValue);
+    console.log(
+      `\x1b[36m📊 DATE DEBUG - Processing as Excel serial number:\x1b[0m`,
+      serial
+    );
+
+    // Excel's epoch starts at 1899-12-30
+    const excelEpoch = new Date(1899, 11, 30);
+    console.log(`\x1b[36m📊 DATE DEBUG - Excel epoch:\x1b[0m`, excelEpoch);
+
+    const date = new Date(excelEpoch.getTime() + serial * 24 * 60 * 60 * 1000);
+    console.log(`\x1b[36m📊 DATE DEBUG - Calculated date object:\x1b[0m`, date);
+
+    // Get the date in local timezone to avoid the "one day ahead" issue
+    const year = date.getFullYear();
+    const month = (date.getMonth() + 1).toString().padStart(2, "0");
+    const day = date.getDate().toString().padStart(2, "0");
+    const result = `${year}-${month}-${day}`;
+
+    console.log(
+      `\x1b[32m✅ DATE DEBUG - Final result (from serial):\x1b[0m`,
+      result
+    );
+    return result;
+  }
+
+  // For string dates, just return as-is (they were working fine)
+  const stringResult = dateValue.toString().trim();
+  console.log(
+    `\x1b[35m📝 DATE DEBUG - Processing as string, result:\x1b[0m`,
+    stringResult
+  );
+  return stringResult;
 }
 
 // Optimized card expiry normalization function
@@ -587,6 +651,16 @@ const getRowData = async (req, res) => {
           // Decrypt sensitive card data before returning
           const decryptedData = decryptCardData(excelData);
 
+          // Debug: Log what's being retrieved from database and sent to UI
+          console.log(
+            `\x1b[46m📤 DATABASE RETRIEVE DEBUG - Check In:\x1b[0m`,
+            decryptedData["Check In"]
+          );
+          console.log(
+            `\x1b[47m📤 DATABASE RETRIEVE DEBUG - Check Out:\x1b[0m`,
+            decryptedData["Check Out"]
+          );
+
           return {
             id: _id,
             ...decryptedData,
@@ -781,8 +855,8 @@ const updateSheet = async (req, res) => {
       "Reservation ID": updateData["Reservation ID"],
       "Hotel Confirmation Code": updateData["Hotel Confirmation Code"],
       Name: updateData["Name"],
-      "Check In": updateData["Check In"],
-      "Check Out": updateData["Check Out"],
+      "Check In": normalizeDateField(updateData["Check In"]),
+      "Check Out": normalizeDateField(updateData["Check Out"]),
       Curency: updateData["Curency"],
       "Amount to charge": updateData["Amount to charge"],
       "Charge status": updateData["Charge status"],
@@ -1478,8 +1552,8 @@ const resumeUpload = async (req, res) => {
             "Reservation ID": rowObject["Reservation ID"],
             "Hotel Confirmation Code": rowObject["Hotel Confirmation Code"],
             Name: rowObject["Name"],
-            "Check In": rowObject["Check In"],
-            "Check Out": rowObject["Check Out"],
+            "Check In": normalizeDateField(rowObject["Check In"]),
+            "Check Out": normalizeDateField(rowObject["Check Out"]),
             Curency: rowObject["Curency"],
             "Amount to charge": rowObject["Amount to charge"],
             "Charge status": rowObject["Charge status"],
