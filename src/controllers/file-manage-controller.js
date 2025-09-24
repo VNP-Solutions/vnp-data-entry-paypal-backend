@@ -216,26 +216,36 @@ async function processFileInBackground(uploadSession, fileBuffer) {
             fileName: uploadSession.fileName,
             uploadStatus: "processing",
             rowNumber: row,
-            "Expedia ID": rowObject["Expedia ID"],
+            "Expedia ID": rowObject["Expedia ID"] || rowObject["Expedia id"],
             Batch: rowObject["Batch"],
-            OTA: rowObject["OTA"],
-            "Posting Type": rowObject["Posting Type"],
+            OTA: rowObject["OTA"] || rowObject["Ota"],
+            "Posting Type":
+              rowObject["Posting Type"] || rowObject["Posting type"],
             Portfolio: rowObject["Portfolio"],
-            "Hotel Name": rowObject["Hotel Name"],
-            "Reservation ID": rowObject["Reservation ID"],
-            "Hotel Confirmation Code": rowObject["Hotel Confirmation Code"],
+            "Hotel Name": rowObject["Hotel Name"] || rowObject["Hotel name"],
+            "Reservation ID":
+              rowObject["Reservation ID"] || rowObject["Reservation id"],
+            "Hotel Confirmation Code":
+              rowObject["Hotel Confirmation Code"] ||
+              rowObject["Hotel confirmation code"],
             Name: rowObject["Name"],
-            "Check In": normalizeDateField(rowObject["Check In"]),
-            "Check Out": normalizeDateField(rowObject["Check Out"]),
+            "Check In":
+              normalizeDateField(rowObject["Check In"]) ||
+              rowObject["Check in"],
+            "Check Out":
+              normalizeDateField(rowObject["Check Out"]) ||
+              rowObject["Check out"],
             Curency: rowObject["Curency"],
-            "Amount to charge": rowObject["Amount to charge"],
-            "Charge status": rowObject["Charge status"],
-            "Card Number": rowObject["Card Number"],
+            "Amount to charge":
+              rowObject["Amount to charge"] || rowObject["Amount to charge"],
+            "Charge status":
+              rowObject["Charge Status"] || rowObject["Charge status"],
+            "Card Number": rowObject["Card Number"] || rowObject["Card number"],
             "Card Expire": cardExpire,
-            "Card CVV": rowObject["Card CVV"],
+            "Card CVV": rowObject["Card CVV"] || rowObject["Card cvv"],
             "Soft Descriptor":
               rowObject["Soft Descriptor"] || rowObject["BT MAID"],
-            "VNP Work ID": rowObject["VNP Work ID"],
+            "VNP Work ID": rowObject["VNP Work ID"] || rowObject["VNP work id"],
             Status: rowObject["Status"],
             ota: otaRecord?.name || otaFromExcel || null,
             otaId: otaRecord?._id || null,
@@ -244,7 +254,9 @@ async function processFileInBackground(uploadSession, fileBuffer) {
           // Add Stripe-specific field if needed
           if (uploadSession.paymentGateway === "stripe") {
             mappedData["Connected Account"] =
-              rowObject["Connected Account"] || null;
+              rowObject["Connected Account"] ||
+              rowObject["Connected account"] ||
+              null;
           }
 
           // Encrypt sensitive data
