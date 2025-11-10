@@ -639,6 +639,7 @@ const getRowData = async (req, res) => {
         { Name: searchRegex },
         { Portfolio: searchRegex },
         { Batch: searchRegex },
+        { fileName: searchRegex },
       ];
     }
 
