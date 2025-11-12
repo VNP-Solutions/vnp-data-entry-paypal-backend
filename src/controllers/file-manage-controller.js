@@ -604,6 +604,39 @@ const uploadFile = async (req, res) => {
   }
 };
 
+
+const getUploadFileSummaries = async (req, res) => {
+  try {
+    const { search } = req.query;
+    const query = {};
+
+    if (search && search.trim() !== "") {
+      query.fileName = { $regex: search.trim(), $options: "i" };
+    }
+
+    const sessions = await UploadSession.find(query, "uploadId fileName")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.status(200).json({
+      status: "success",
+      data: sessions.map((session) => ({
+        _id: session._id,
+        uploadId: session.uploadId,
+        fileName: session.fileName,
+      })),
+    });
+  } catch (error) {
+    console.error("Error getting upload file summaries:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Error getting upload file summaries",
+      error: error.message,
+    });
+  }
+};
+
+
 // Get all row data from all users
 const getRowData = async (req, res) => {
   try {
@@ -613,6 +646,7 @@ const getRowData = async (req, res) => {
       chargeStatus,
       search,
       paymentGateway = "paypal",
+      uploadId,
     } = req.query;
     const userId = req.user.userId;
 
@@ -627,6 +661,10 @@ const getRowData = async (req, res) => {
     // Add filter for Charge status if provided (skip if "All" is selected)
     if (chargeStatus && chargeStatus.trim() !== "" && chargeStatus !== "All") {
       query["Charge status"] = chargeStatus;
+    }
+
+    if (uploadId && uploadId.trim() !== "") {
+      query.uploadId = uploadId.trim();
     }
 
     // Add search functionality across multiple fields if provided
@@ -665,14 +703,7 @@ const getRowData = async (req, res) => {
           const decryptedData = decryptCardData(excelData);
 
           // Debug: Log what's being retrieved from database and sent to UI
-          console.log(
-            `\x1b[46m📤 DATABASE RETRIEVE DEBUG - Check In:\x1b[0m`,
-            decryptedData["Check In"]
-          );
-          console.log(
-            `\x1b[47m📤 DATABASE RETRIEVE DEBUG - Check Out:\x1b[0m`,
-            decryptedData["Check Out"]
-          );
+          
 
           return {
             id: _id,
@@ -690,6 +721,7 @@ const getRowData = async (req, res) => {
           chargeStatus: chargeStatus || null,
           search: search || null,
           paymentGateway: paymentGateway,
+          uploadId: uploadId || null,
         },
       },
     });
@@ -2158,6 +2190,7 @@ module.exports = {
   deleteUploadById,
   getFileHeaders,
   getUploadStatus,
+  getUploadFileSummaries,
   getUserUploadSessions,
   resumeUpload,
   cleanupFailedUploads,

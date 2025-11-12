@@ -202,6 +202,11 @@ app.get(
   authenticateToken,
   fileController.getUserUploadSessions
 );
+app.get(
+  "/api/upload/files",
+  authenticateToken,
+  fileController.getUploadFileSummaries
+);
 app.post(
   "/api/upload/resume/:uploadId",
   authenticateToken,
