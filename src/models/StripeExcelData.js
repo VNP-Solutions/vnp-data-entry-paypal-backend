@@ -241,6 +241,10 @@ const stripeExcelDataSchema = new mongoose.Schema(
       ref: "OTA",
       default: null,
     },
+    archive: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

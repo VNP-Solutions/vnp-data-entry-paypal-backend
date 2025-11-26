@@ -87,6 +87,10 @@ const uploadSessionSchema = new mongoose.Schema(
       enum: ["paypal", "stripe"],
       default: "paypal",
     },
+    archive: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

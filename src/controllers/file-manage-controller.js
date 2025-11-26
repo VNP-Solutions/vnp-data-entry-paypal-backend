@@ -658,6 +658,9 @@ const getRowData = async (req, res) => {
     // Build query object - show data from all users
     const query = {};
 
+    // Filter out archived rows - only show rows where archive is false or doesn't exist
+    query.archive = { $ne: true };
+
     // Add filter for Charge status if provided (skip if "All" is selected)
     if (chargeStatus && chargeStatus.trim() !== "" && chargeStatus !== "All") {
       query["Charge status"] = chargeStatus;
@@ -748,6 +751,9 @@ const getStripeRowData = async (req, res) => {
 
     // Build query object - show data from all users
     const query = {};
+
+    // Filter out archived rows - only show rows where archive is false or doesn't exist
+    query.archive = { $ne: true };
 
     // Add filter for Charge status if provided (skip if "All" is selected)
     if (chargeStatus && chargeStatus.trim() !== "" && chargeStatus !== "All") {
@@ -1351,6 +1357,7 @@ const getUserUploadSessions = async (req, res) => {
           completedAt: session.completedAt,
           chargedCount: chargedCounts[idx],
           paymentGateway: session.paymentGateway || "paypal",
+          archive: session.archive || false,
           uploadedBy: {
             userId: session.userId._id,
             email: session.userId.email,
@@ -2178,6 +2185,136 @@ const getTransactionHistory = async (req, res) => {
   }
 };
 
+// Archive all rows for a specific upload session
+const archiveFile = async (req, res) => {
+  try {
+    const { uploadId } = req.params;
+    const userId = req.user.userId;
+
+    if (!uploadId) {
+      return res.status(400).json({
+        status: "error",
+        message: "Upload ID is required",
+      });
+    }
+
+    // Find the upload session to determine payment gateway
+    const uploadSession = await UploadSession.findOne({
+      uploadId: uploadId,
+    });
+
+    if (!uploadSession) {
+      return res.status(404).json({
+        status: "error",
+        message: "Upload session not found",
+      });
+    }
+
+    // Choose the appropriate model based on payment gateway
+    const paymentGateway = uploadSession.paymentGateway || "paypal";
+    const DataModel = paymentGateway === "stripe" ? StripeExcelData : ExcelData;
+
+    // Update all rows for this uploadId to set archive: true
+    const updateResult = await DataModel.updateMany(
+      { uploadId: uploadId },
+      { $set: { archive: true } }
+    );
+
+    // Update the upload session to set archive: true
+    await UploadSession.findOneAndUpdate(
+      { uploadId: uploadId },
+      { $set: { archive: true } }
+    );
+
+    console.log(
+      `\x1b[36m📦 ARCHIVED: Upload ID ${uploadId} - ${updateResult.modifiedCount} rows archived (${paymentGateway.toUpperCase()})\x1b[0m`
+    );
+
+    res.status(200).json({
+      status: "success",
+      message: "File archived successfully",
+      data: {
+        uploadId: uploadId,
+        fileName: uploadSession.fileName,
+        archivedRows: updateResult.modifiedCount,
+        matchedRows: updateResult.matchedCount,
+      },
+    });
+  } catch (error) {
+    console.error("Error archiving file:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Error archiving file",
+      error: error.message,
+    });
+  }
+};
+
+// Unarchive all rows for a specific upload session
+const unarchiveFile = async (req, res) => {
+  try {
+    const { uploadId } = req.params;
+    const userId = req.user.userId;
+
+    if (!uploadId) {
+      return res.status(400).json({
+        status: "error",
+        message: "Upload ID is required",
+      });
+    }
+
+    // Find the upload session to determine payment gateway
+    const uploadSession = await UploadSession.findOne({
+      uploadId: uploadId,
+    });
+
+    if (!uploadSession) {
+      return res.status(404).json({
+        status: "error",
+        message: "Upload session not found",
+      });
+    }
+
+    // Choose the appropriate model based on payment gateway
+    const paymentGateway = uploadSession.paymentGateway || "paypal";
+    const DataModel = paymentGateway === "stripe" ? StripeExcelData : ExcelData;
+
+    // Update all rows for this uploadId to set archive: false
+    const updateResult = await DataModel.updateMany(
+      { uploadId: uploadId },
+      { $set: { archive: false } }
+    );
+
+    // Update the upload session to set archive: false
+    await UploadSession.findOneAndUpdate(
+      { uploadId: uploadId },
+      { $set: { archive: false } }
+    );
+
+    console.log(
+      `\x1b[36m📂 UNARCHIVED: Upload ID ${uploadId} - ${updateResult.modifiedCount} rows unarchived (${paymentGateway.toUpperCase()})\x1b[0m`
+    );
+
+    res.status(200).json({
+      status: "success",
+      message: "File unarchived successfully",
+      data: {
+        uploadId: uploadId,
+        fileName: uploadSession.fileName,
+        unarchivedRows: updateResult.modifiedCount,
+        matchedRows: updateResult.matchedCount,
+      },
+    });
+  } catch (error) {
+    console.error("Error unarchiving file:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Error unarchiving file",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   upload,
   uploadFile,
@@ -2196,4 +2333,6 @@ module.exports = {
   cleanupFailedUploads,
   downloadExcelByUploadId,
   getTransactionHistory,
+  archiveFile,
+  unarchiveFile,
 };

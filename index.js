@@ -222,6 +222,16 @@ app.delete(
   authenticateToken,
   fileController.deleteUploadById
 );
+app.post(
+  "/api/upload/archive/:uploadId",
+  authenticateToken,
+  fileController.archiveFile
+);
+app.post(
+  "/api/upload/unarchive/:uploadId",
+  authenticateToken,
+  fileController.unarchiveFile
+);
 
 // PayPal Payment API Routes (protected)
 app.post(

@@ -231,6 +231,10 @@ const excelDataSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'OTA',
         default: null
+    },
+    archive: {
+        type: Boolean,
+        default: false
     }
 }, {
     timestamps: true
