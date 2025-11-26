@@ -2315,6 +2315,115 @@ const unarchiveFile = async (req, res) => {
   }
 };
 
+// Create a new ExcelData entry manually
+const createExcelData = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { paymentGateway = "paypal" } = req.query;
+    const data = req.body;
+
+    // Choose the appropriate model based on payment gateway
+    const DataModel = paymentGateway === "stripe" ? StripeExcelData : ExcelData;
+
+    // Generate unique uploadId for manual entry
+    const uploadId = `manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const fileName = `Manual Entry - ${new Date().toISOString().split('T')[0]}`;
+
+    // Normalize Card Expire to YYYY-MM format
+    let cardExpire = normalizeCardExpiry(data["Card Expire"]);
+
+    // Process OTA field if provided
+    let otaRecord = null;
+    const otaFromExcel = data["OTA"]?.trim();
+
+    if (otaFromExcel) {
+      try {
+        otaRecord = await OTA.findOne({
+          name: otaFromExcel,
+          isActive: true,
+        });
+      } catch (otaError) {
+        console.error("Error finding OTA record:", otaError);
+      }
+    }
+
+    // Map the data
+    const mappedData = {
+      userId: userId,
+      uploadId: uploadId,
+      fileName: fileName,
+      uploadStatus: "completed",
+      rowNumber: 1,
+      "Expedia ID": data["Expedia ID"] || null,
+      Batch: data["Batch"] || null,
+      OTA: data["OTA"] || null,
+      "Posting Type": data["Posting Type"] || null,
+      Portfolio: data["Portfolio"] || null,
+      "Hotel Name": data["Hotel Name"] || null,
+      "Reservation ID": data["Reservation ID"] || null,
+      "Hotel Confirmation Code": data["Hotel Confirmation Code"] || null,
+      Name: data["Name"] || null,
+      "Check In": normalizeDateField(data["Check In"]) || null,
+      "Check Out": normalizeDateField(data["Check Out"]) || null,
+      Curency: data["Curency"] || null,
+      "Amount to charge": data["Amount to charge"] || null,
+      "Charge status": data["Charge status"] || null,
+      "Card Number": data["Card Number"] || null,
+      "Card Expire": cardExpire,
+      "Card CVV": data["Card CVV"] || null,
+      "Soft Descriptor": data["Soft Descriptor"] || data["BT MAID"] || null,
+      "VNP Work ID": data["VNP Work ID"] || null,
+      Status: data["Status"] || null,
+      ota: otaRecord?.name || otaFromExcel || null,
+      otaId: otaRecord?._id || null,
+      archive: false, // Manual entries are not archived by default
+    };
+
+    // Add Stripe-specific field if payment gateway is stripe
+    if (paymentGateway === "stripe") {
+      mappedData["Connected Account"] = data["Connected Account"] || null;
+    }
+
+    // Encrypt sensitive card data
+    const encryptedData = encryptCardData(mappedData);
+
+    // Create the record
+    const newRecord = new DataModel(encryptedData);
+    await newRecord.save();
+
+    // Populate OTA data
+    await newRecord.populate("otaId", "name displayName customer billingAddress isActive");
+
+    console.log(
+      `\x1b[32m✅ MANUAL ENTRY CREATED: Record ID ${newRecord._id} (${paymentGateway.toUpperCase()})\x1b[0m`
+    );
+
+    // Prepare response data
+    const { _id, userId: userIdField, __v, createdAt, updatedAt, ...excelData } =
+      newRecord.toObject();
+
+    // Decrypt sensitive card data before returning
+    const decryptedData = decryptCardData(excelData);
+
+    res.status(201).json({
+      status: "success",
+      message: "Excel data created successfully",
+      data: {
+        id: _id,
+        ...decryptedData,
+        createdAt: createdAt,
+      },
+    });
+  } catch (error) {
+    console.error("Error creating Excel data:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Error creating Excel data",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   upload,
   uploadFile,
@@ -2335,4 +2444,5 @@ module.exports = {
   getTransactionHistory,
   archiveFile,
   unarchiveFile,
+  createExcelData,
 };

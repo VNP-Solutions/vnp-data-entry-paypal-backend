@@ -179,6 +179,11 @@ app.put(
   authenticateToken,
   fileController.updateSheet
 );
+app.post(
+  "/api/create-excel-data",
+  authenticateToken,
+  fileController.createExcelData
+);
 app.get("/api/user-files", authenticateToken, fileController.getUserFiles);
 app.get("/api/file-headers", authenticateToken, fileController.getFileHeaders);
 app.delete(
