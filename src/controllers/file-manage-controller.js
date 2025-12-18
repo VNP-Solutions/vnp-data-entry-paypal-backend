@@ -2428,18 +2428,16 @@ const createExcelData = async (req, res) => {
 const getManualExcelData = async (req, res) => {
   try {
     const { paymentGateway = "paypal" } = req.query;
-    const userId = req.user.userId;
 
     // Choose the appropriate model based on payment gateway
     const DataModel = paymentGateway === "stripe" ? StripeExcelData : ExcelData;
 
-    // Build query object - filter for manual entries only
+    // Build query object - filter for manual entries only (across all users)
     const query = {
-      userId: userId,
       uploadId: { $regex: "^manual_", $options: "i" }, // Match uploadId starting with "manual_"
     };
 
-    // Get all manual entries for the user
+    // Get all manual entries
     const rowData = await DataModel.find(query)
       .populate("otaId", "name displayName customer billingAddress isActive") // Populate OTA data
       .sort({ createdAt: -1 });
