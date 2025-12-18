@@ -2424,6 +2424,54 @@ const createExcelData = async (req, res) => {
   }
 };
 
+// Get all manually created ExcelData entries
+const getManualExcelData = async (req, res) => {
+  try {
+    const { paymentGateway = "paypal" } = req.query;
+    const userId = req.user.userId;
+
+    // Choose the appropriate model based on payment gateway
+    const DataModel = paymentGateway === "stripe" ? StripeExcelData : ExcelData;
+
+    // Build query object - filter for manual entries only
+    const query = {
+      userId: userId,
+      uploadId: { $regex: "^manual_", $options: "i" }, // Match uploadId starting with "manual_"
+    };
+
+    // Get all manual entries for the user
+    const rowData = await DataModel.find(query)
+      .populate("otaId", "name displayName customer billingAddress isActive") // Populate OTA data
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      status: "success",
+      message: "Manual ExcelData entries retrieved successfully",
+      data: rowData.map((row) => {
+        // Remove MongoDB internal fields and userId, return only the Excel data
+        const { _id, userId, __v, createdAt, updatedAt, ...excelData } =
+          row.toObject();
+
+        // Decrypt sensitive card data before returning
+        const decryptedData = decryptCardData(excelData);
+
+        return {
+          id: _id,
+          ...decryptedData,
+          createdAt: createdAt,
+        };
+      }),
+    });
+  } catch (error) {
+    console.error("Get manual ExcelData error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Error retrieving manual ExcelData entries",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   upload,
   uploadFile,
@@ -2445,4 +2493,5 @@ module.exports = {
   archiveFile,
   unarchiveFile,
   createExcelData,
+  getManualExcelData,
 };

@@ -184,6 +184,11 @@ app.post(
   authenticateToken,
   fileController.createExcelData
 );
+app.get(
+  "/api/manual-excel-data",
+  authenticateToken,
+  fileController.getManualExcelData
+);
 app.get("/api/user-files", authenticateToken, fileController.getUserFiles);
 app.get("/api/file-headers", authenticateToken, fileController.getFileHeaders);
 app.delete(
