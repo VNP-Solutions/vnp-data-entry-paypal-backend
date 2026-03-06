@@ -1,4 +1,11 @@
-const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const Stripe = require("stripe");
+
+let stripe = null;
+if (process.env.STRIPE_SECRET_KEY) {
+  stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+} else {
+  console.warn("⚠️ Stripe SDK skipped - no STRIPE_SECRET_KEY in environment variables.");
+}
 const StripeSetting = require("../models/StripeSetting");
 const ExcelData = require("../models/ExcelData");
 const { encryptCardData, decryptCardData } = require("../utils/encryption");

@@ -63,7 +63,6 @@ otaSchema.pre('save', function(next) {
 });
 
 // Create index for faster queries
-otaSchema.index({ name: 1 });
 otaSchema.index({ isActive: 1 });
 
 module.exports = mongoose.model('OTA', otaSchema); 

@@ -1,0 +1,376 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "QuantumPay VNP Integration API",
+        "version": "1.0.0",
+        "description": "API documentation for the internal QuantumPay VNP Data Entry tool. Includes endpoints for managing terminal credentials, parsing charge files, executing background payment attempts, and reviewing trace queries."
+    },
+    "servers": [
+        {
+            "url": "http://localhost:5001",
+            "description": "Local development server"
+        }
+    ],
+    "components": {
+        "securitySchemes": {
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT"
+            }
+        }
+    },
+    "security": [
+        {
+            "bearerAuth": []
+        }
+    ],
+    "paths": {
+        "/api/terminal-credentials": {
+            "post": {
+                "summary": "Create a Terminal Credential",
+                "tags": [
+                    "Terminal Credentials"
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "hotel_id": {
+                                        "type": "string"
+                                    },
+                                    "username": {
+                                        "type": "string"
+                                    },
+                                    "terminal_key": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Created"
+                    }
+                }
+            },
+            "get": {
+                "summary": "List all Terminal Credentials",
+                "tags": [
+                    "Terminal Credentials"
+                ],
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "hotel_id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "include_deleted",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success"
+                    }
+                }
+            }
+        },
+        "/api/terminal-credentials/export": {
+            "get": {
+                "summary": "Export Credentials to Excel",
+                "tags": [
+                    "Terminal Credentials"
+                ],
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "mask_terminal_key",
+                        "schema": {
+                            "type": "boolean",
+                            "default": true
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "File Download"
+                    }
+                }
+            }
+        },
+        "/api/terminal-credentials/import": {
+            "post": {
+                "summary": "Import Credentials via XLSX/CSV",
+                "tags": [
+                    "Terminal Credentials"
+                ],
+                "requestBody": {
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "file": {
+                                        "type": "string",
+                                        "format": "binary"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Imported successfully"
+                    }
+                }
+            }
+        },
+        "/api/qp-charge-files/import": {
+            "post": {
+                "summary": "Import QuantumPay Charge Batch File (XLSX/CSV)",
+                "tags": [
+                    "Charge Files"
+                ],
+                "requestBody": {
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "file": {
+                                        "type": "string",
+                                        "format": "binary"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "File parsed and instances created"
+                    }
+                }
+            }
+        },
+        "/api/qp-charge-files": {
+            "get": {
+                "summary": "List Charge Files",
+                "tags": [
+                    "Charge Files"
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success"
+                    }
+                }
+            }
+        },
+        "/api/qp-charge-files/{id}/process": {
+            "post": {
+                "summary": "Process all pending instances in a file (bulk run)",
+                "tags": [
+                    "Charge Files"
+                ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Processing started in background"
+                    }
+                }
+            }
+        },
+        "/api/qp-charge-files/{id}/progress": {
+            "get": {
+                "summary": "Get processing progress counters for a file",
+                "tags": [
+                    "Charge Files"
+                ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success"
+                    }
+                }
+            }
+        },
+        "/api/qp-charge-files/{id}/download-compiled": {
+            "get": {
+                "summary": "Download fully compiled post-processed spreadsheet",
+                "tags": [
+                    "Charge Files"
+                ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "File Download"
+                    }
+                }
+            }
+        },
+        "/api/qp-charge-instances": {
+            "get": {
+                "summary": "List Charge Instances (Rows)",
+                "tags": [
+                    "Charge Instances"
+                ],
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "charge_file_id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "status",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success"
+                    }
+                }
+            }
+        },
+        "/api/qp-charge-instances/{id}/process": {
+            "post": {
+                "summary": "Process single charge instance",
+                "tags": [
+                    "Charge Instances"
+                ],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "id",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Processed"
+                    }
+                }
+            }
+        },
+        "/api/qp-payment-attempts": {
+            "get": {
+                "summary": "Query detailed provider attempt responses and payloads",
+                "tags": [
+                    "Traceability & Logs"
+                ],
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "run_id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "charge_instance_id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success"
+                    }
+                }
+            }
+        },
+        "/api/system-logs": {
+            "get": {
+                "summary": "Trace application events directly from API",
+                "tags": [
+                    "Traceability & Logs"
+                ],
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "run_id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "request_id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "action",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success"
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,1122 @@
+{
+    "info": {
+        "name": "QuantumPay VNP Integration",
+        "description": "API endpoints to manage Terminal Credentials, Charge Files, and Processing. All endpoints use Bearer Token authentication. Add your JWT token to the collection variables ({{jwt_token}}).",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "variable": [
+        {
+            "key": "base_url",
+            "value": "http://localhost:3001/api",
+            "type": "default"
+        },
+        {
+            "key": "jwt_token",
+            "value": "PASTE_YOUR_JWT_TOKEN_HERE",
+            "type": "default",
+            "description": "JWT Bearer token from login endpoint"
+        }
+    ],
+    "auth": {
+        "type": "bearer",
+        "bearer": [
+            {
+                "key": "token",
+                "value": "{{jwt_token}}",
+                "type": "string"
+            }
+        ]
+    },
+    "item": [
+        {
+            "name": "Authentication",
+            "description": "Authentication endpoints for user registration, login, and OTP verification. All endpoints use Bearer Token authentication except login/register.",
+            "auth": {
+                "type": "noauth"
+            },
+            "item": [
+                {
+                    "name": "Register (Sign Up)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"name\": \"John Doe\",\n  \"email\": \"john.doe@example.com\",\n  \"password\": \"SecurePass123!\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/auth/register",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "auth",
+                                "register"
+                            ]
+                        },
+                        "description": "Register a new user account. Returns JWT token immediately (no OTP for registration)."
+                    }
+                },
+                {
+                    "name": "Login (Step 1 - Send OTP)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"secure_password_123\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/auth/login",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "auth",
+                                "login"
+                            ]
+                        },
+                        "description": "Login with email/password. Sends 6-digit OTP to email. Copy sessionToken from response for Step 2."
+                    }
+                },
+                {
+                    "name": "Verify OTP (Step 2 - Complete Login)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"sessionToken\": \"PASTE_SESSION_TOKEN_FROM_LOGIN_RESPONSE\",\n  \"otp\": \"123456\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/auth/verify-otp",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "auth",
+                                "verify-otp"
+                            ]
+                        },
+                        "description": "Verify the 6-digit OTP from email. Returns JWT token. Copy token to {{jwt_token}} collection variable."
+                    }
+                },
+                {
+                    "name": "Resend OTP",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"sessionToken\": \"PASTE_SESSION_TOKEN_FROM_LOGIN_RESPONSE\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/auth/resend-otp",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "auth",
+                                "resend-otp"
+                            ]
+                        },
+                        "description": "Resend OTP if the previous one expired. Use the same sessionToken from login response."
+                    }
+                },
+                {
+                    "name": "Get Profile",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/auth/profile",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "auth",
+                                "profile"
+                            ]
+                        },
+                        "description": "Get current user profile information. Requires Bearer token."
+                    },
+                    "auth": {
+                        "type": "bearer",
+                        "bearer": [
+                            {
+                                "key": "token",
+                                "value": "{{jwt_token}}",
+                                "type": "string"
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Terminal Credentials Vault",
+            "description": "Manage QuantumPay terminal credentials per hotel",
+            "auth": {
+                "type": "bearer",
+                "bearer": [
+                    {
+                        "key": "token",
+                        "value": "{{jwt_token}}",
+                        "type": "string"
+                    }
+                ]
+            },
+            "item": [
+                {
+                    "name": "Create Credential",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"hotel_id\": \"EXPEDIA_HOTEL_ID_123\",\n  \"username\": \"terminal_user\",\n  \"terminal_key\": \"your_terminal_key_12345\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/terminal-credentials",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "terminal-credentials"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "List Credentials",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/terminal-credentials",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "terminal-credentials"
+                            ],
+                            "query": [
+                                {
+                                    "key": "hotel_id",
+                                    "value": "EXPEDIA123",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "q",
+                                    "value": "search_term",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "include_deleted",
+                                    "value": "false",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "include_key",
+                                    "value": "false",
+                                    "disabled": true,
+                                    "description": "true to include decrypted terminal_key in response"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Get Credential",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/terminal-credentials/:id",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "terminal-credentials",
+                                ":id"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "CREDENTIAL_ID",
+                                    "description": "Credential ObjectId"
+                                }
+                            ],
+                            "query": [
+                                {
+                                    "key": "include_key",
+                                    "value": "false",
+                                    "disabled": true,
+                                    "description": "true to include decrypted terminal_key in response"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Update Credential",
+                    "request": {
+                        "method": "PATCH",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"username\": \"new_username\",\n  \"terminal_key\": \"new_terminal_key\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/terminal-credentials/:id",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "terminal-credentials",
+                                ":id"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "CREDENTIAL_ID"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Delete Credential",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/terminal-credentials/:id",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "terminal-credentials",
+                                ":id"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "CREDENTIAL_ID"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Bulk Import Credentials",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {
+                            "mode": "formdata",
+                            "formdata": [
+                                {
+                                    "key": "file",
+                                    "type": "file",
+                                    "src": ""
+                                }
+                            ]
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/terminal-credentials/import",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "terminal-credentials",
+                                "import"
+                            ]
+                        },
+                        "description": "Upload XLSX/CSV file with columns: hotel_id, username, terminal_key"
+                    }
+                },
+                {
+                    "name": "Export Credentials",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/terminal-credentials/export?mask_terminal_key=true",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "terminal-credentials",
+                                "export"
+                            ],
+                            "query": [
+                                {
+                                    "key": "mask_terminal_key",
+                                    "value": "true",
+                                    "description": "true to mask keys, false to export actual keys"
+                                },
+                                {
+                                    "key": "format",
+                                    "value": "xlsx",
+                                    "disabled": true,
+                                    "description": "xlsx or csv"
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Charge Files (Batches)",
+            "description": "Upload and manage charging sheets (XLSX/CSV)",
+            "auth": {
+                "type": "bearer",
+                "bearer": [
+                    {
+                        "key": "token",
+                        "value": "{{jwt_token}}",
+                        "type": "string"
+                    }
+                ]
+            },
+            "item": [
+                {
+                    "name": "Upload Charge File",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {
+                            "mode": "formdata",
+                            "formdata": [
+                                {
+                                    "key": "file",
+                                    "type": "file",
+                                    "src": "",
+                                    "description": "XLSX or CSV file with charge records"
+                                }
+                            ]
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-files/import",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-files",
+                                "import"
+                            ]
+                        },
+                        "description": "Import a charge file. Returns charge_file_id for use in other operations."
+                    }
+                },
+                {
+                    "name": "List Charge Files",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-files",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-files"
+                            ],
+                            "query": [
+                                {
+                                    "key": "status",
+                                    "value": "COMPLETED",
+                                    "disabled": true,
+                                    "description": "IMPORTED, PROCESSING, COMPLETED, COMPLETED_WITH_ERRORS, FAILED"
+                                },
+                                {
+                                    "key": "created_by",
+                                    "value": "USER_ID",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "date_from",
+                                    "value": "2026-03-01",
+                                    "disabled": true,
+                                    "description": "ISO date format"
+                                },
+                                {
+                                    "key": "date_to",
+                                    "value": "2026-03-31",
+                                    "disabled": true,
+                                    "description": "ISO date format"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Get Charge File Details",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-files/:id",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-files",
+                                ":id"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "CHARGE_FILE_ID"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Update Charge File",
+                    "request": {
+                        "method": "PATCH",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"file_name\": \"Updated file name\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-files/:id",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-files",
+                                ":id"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "CHARGE_FILE_ID"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Delete Charge File",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-files/:id",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-files",
+                                ":id"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "CHARGE_FILE_ID"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Get File Progress",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-files/:id/progress",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-files",
+                                ":id",
+                                "progress"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "CHARGE_FILE_ID"
+                                }
+                            ]
+                        },
+                        "description": "Get processing status and counters"
+                    }
+                },
+                {
+                    "name": "Export Raw Instances",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-files/:id/export",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-files",
+                                ":id",
+                                "export"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "CHARGE_FILE_ID"
+                                }
+                            ]
+                        },
+                        "description": "Export pre-processing view of instances"
+                    }
+                },
+                {
+                    "name": "Start Bulk Processing",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {},
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-files/:id/process",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-files",
+                                ":id",
+                                "process"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "CHARGE_FILE_ID"
+                                }
+                            ]
+                        },
+                        "description": "Start bulk processing. Processes instances sequentially and returns 202 Accepted with run_id."
+                    }
+                },
+                {
+                    "name": "Download Compiled Results",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-files/:id/download-compiled",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-files",
+                                ":id",
+                                "download-compiled"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "CHARGE_FILE_ID"
+                                }
+                            ]
+                        },
+                        "description": "Download XLSX file with original columns + payment outcome columns"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Charge Instances",
+            "description": "Manage individual charge records",
+            "auth": {
+                "type": "bearer",
+                "bearer": [
+                    {
+                        "key": "token",
+                        "value": "{{jwt_token}}",
+                        "type": "string"
+                    }
+                ]
+            },
+            "item": [
+                {
+                    "name": "List Charge Instances",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-instances",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-instances"
+                            ],
+                            "query": [
+                                {
+                                    "key": "charge_file_id",
+                                    "value": "FILE_ID",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "hotel_id",
+                                    "value": "HOTEL_ID",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "reservation_id",
+                                    "value": "RES_ID",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "status",
+                                    "value": "SUCCESS",
+                                    "disabled": true,
+                                    "description": "PENDING, PROCESSING, SUCCESS, DECLINED, ERROR, INVALID, SKIPPED"
+                                },
+                                {
+                                    "key": "ota",
+                                    "value": "otatype",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "vnp_work_id",
+                                    "value": "work_id",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "portfolio",
+                                    "value": "portfolio",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "date_from",
+                                    "value": "2026-03-01",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "date_to",
+                                    "value": "2026-03-31",
+                                    "disabled": true
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Get Charge Instance",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-instances/:id",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-instances",
+                                ":id"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "INSTANCE_ID"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Update Charge Instance",
+                    "request": {
+                        "method": "PATCH",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"amount_numeric\": 150.00,\n  \"currency\": \"USD\",\n  \"billing_address\": {\n    \"address_1\": \"123 Main St\",\n    \"city\": \"New York\",\n    \"state\": \"NY\",\n    \"postal_code\": \"10001\",\n    \"country_code\": \"US\"\n  },\n  \"expiry_month\": 3,\n  \"expiry_year\": 2026\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-instances/:id",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-instances",
+                                ":id"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "INSTANCE_ID"
+                                }
+                            ]
+                        },
+                        "description": "Can only edit instances in PENDING or INVALID status"
+                    }
+                },
+                {
+                    "name": "Delete Charge Instance",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-instances/:id",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-instances",
+                                ":id"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "INSTANCE_ID"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Export Charge Instances",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-instances/export",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-instances",
+                                "export"
+                            ],
+                            "query": [
+                                {
+                                    "key": "charge_file_id",
+                                    "value": "FILE_ID",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "status",
+                                    "value": "SUCCESS",
+                                    "disabled": true
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Process Single Instance",
+                    "request": {
+                        "method": "POST",
+                        "header": [],
+                        "body": {},
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-instances/:id/process",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-instances",
+                                ":id",
+                                "process"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "INSTANCE_ID"
+                                }
+                            ]
+                        },
+                        "description": "Process a single charge instance immediately"
+                    }
+                },
+                {
+                    "name": "Process Multiple Instances",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n  \"ids\": [\"INSTANCE_ID_1\", \"INSTANCE_ID_2\"]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/qp-charge-instances/process",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-charge-instances",
+                                "process"
+                            ]
+                        },
+                        "description": "Process a custom list of instance IDs. Request body must include \"ids\": array of instance ObjectIds."
+                    }
+                }
+            ]
+        },
+
+
+        {
+            "name": "Traceability & Logs",
+            "description": "View payment attempts and system logs for debugging",
+            "auth": {
+                "type": "bearer",
+                "bearer": [
+                    {
+                        "key": "token",
+                        "value": "{{jwt_token}}",
+                        "type": "string"
+                    }
+                ]
+            },
+            "item": [
+                {
+                    "name": "List Payment Attempts",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-payment-attempts",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-payment-attempts"
+                            ],
+                            "query": [
+                                {
+                                    "key": "charge_instance_id",
+                                    "value": "INSTANCE_ID",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "run_id",
+                                    "value": "run_xxx",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "result",
+                                    "value": "SUCCESS",
+                                    "disabled": true,
+                                    "description": "SUCCESS, DECLINED, ERROR"
+                                },
+                                {
+                                    "key": "date_from",
+                                    "value": "2026-03-01",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "date_to",
+                                    "value": "2026-03-31",
+                                    "disabled": true
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Get Payment Attempt",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/qp-payment-attempts/:id",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "qp-payment-attempts",
+                                ":id"
+                            ],
+                            "variable": [
+                                {
+                                    "key": "id",
+                                    "value": "ATTEMPT_ID"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "System Logs",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/system-logs",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "system-logs"
+                            ],
+                            "query": [
+                                {
+                                    "key": "request_id",
+                                    "value": "req_xxx",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "run_id",
+                                    "value": "run_xxx",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "action",
+                                    "value": "PROVIDER_CALL",
+                                    "disabled": true,
+                                    "description": "TERMINAL_CRED_*, CHARGE_FILE_*, CHARGE_INSTANCE_*, PROVIDER_CALL, etc."
+                                },
+                                {
+                                    "key": "entity_type",
+                                    "value": "QPChargeInstance",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "entity_id",
+                                    "value": "ENTITY_ID",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "level",
+                                    "value": "ERROR",
+                                    "disabled": true,
+                                    "description": "INFO, WARN, ERROR"
+                                },
+                                {
+                                    "key": "date_from",
+                                    "value": "2026-03-01",
+                                    "disabled": true
+                                },
+                                {
+                                    "key": "date_to",
+                                    "value": "2026-03-31",
+                                    "disabled": true
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Health Check",
+            "auth": {
+                "type": "noauth"
+            },
+            "item": [
+                {
+                    "name": "API Health",
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/health",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "health"
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

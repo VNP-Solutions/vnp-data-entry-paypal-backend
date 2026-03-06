@@ -137,7 +137,6 @@ const disputeSchema = new mongoose.Schema(
 );
 
 // Indexes for faster queries
-disputeSchema.index({ stripeDisputeId: 1 });
 disputeSchema.index({ stripeExcelDataId: 1 });
 disputeSchema.index({ stripeLatestChargeId: 1 });
 disputeSchema.index({ stripePaymentIntentId: 1 });

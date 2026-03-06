@@ -29,6 +29,7 @@
     "nodemailer": "^6.9.7",
     "p-limit": "^2.3.0",
     "stripe": "^18.3.0",
+    "swagger-ui-express": "^5.0.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

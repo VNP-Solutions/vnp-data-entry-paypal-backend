@@ -12,8 +12,13 @@ const invitationController = require("./src/controllers/invitation-controller");
 const paypalController = require("./src/controllers/paypal-integration");
 const stripeController = require("./src/controllers/stripe-controller");
 const otaController = require("./src/controllers/ota-controller");
+const terminalCredentialController = require("./src/controllers/terminal-credential-controller");
+const qpChargeController = require("./src/controllers/qp-charge-controller");
+const qpLogController = require("./src/controllers/qp-log-controller");
 const { authenticateToken } = require("./src/middleware/auth");
 const multer = require("multer");
+const swaggerUi = require("swagger-ui-express");
+const swaggerDocument = require("./swagger.json");
 
 // Configure multer for file uploads (for dispute evidence)
 const storage = multer.diskStorage({
@@ -47,6 +52,34 @@ const uploadEvidence = multer({
       cb(null, true);
     } else {
       cb(new Error("Invalid file type for dispute evidence"), false);
+    }
+  },
+});
+
+// Dedicated multer for XLSX/CSV imports (Charge Files & Terminal Credentials)
+const uploadChargeFiles = multer({
+  storage: storage,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB limit for bulk imports
+  },
+  fileFilter: function (req, file, cb) {
+    // Allow XLSX and CSV files for charge imports
+    const allowedTypes = [
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
+      "application/vnd.ms-excel", // .xls
+      "text/csv",
+      "text/plain", // Some systems send CSV as plain text
+      "application/x-csv",
+      "application/csv",
+    ];
+
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(
+        new Error("Invalid file type. Please upload XLSX or CSV only."),
+        false,
+      );
     }
   },
 });
@@ -108,7 +141,7 @@ app.use(cors());
 app.post(
   "/webhook",
   express.raw({ type: "application/json" }),
-  stripeController.handleStripeWebhook
+  stripeController.handleStripeWebhook,
 );
 
 // Enable JSON parsing for request bodies
@@ -137,13 +170,13 @@ app.post("/api/auth/reset-password/:token", authController.resetPassword);
 app.post(
   "/api/invitations/send",
   authenticateToken,
-  invitationController.sendInvitation
+  invitationController.sendInvitation,
 );
 app.post("/api/invitations/validate", invitationController.validateInvitation);
 app.get(
   "/api/invitations/my-invitations",
   authenticateToken,
-  invitationController.getMyInvitations
+  invitationController.getMyInvitations,
 );
 app.post("/api/invitations/complete", invitationController.completeInvitation);
 
@@ -156,201 +189,201 @@ app.post(
   "/api/upload",
   authenticateToken,
   fileController.upload.single("file"),
-  fileController.uploadFile
+  fileController.uploadFile,
 );
 app.get("/api/get-row-data", authenticateToken, fileController.getRowData);
 app.get(
   "/api/get-stripe-row-data",
   authenticateToken,
-  fileController.getStripeRowData
+  fileController.getStripeRowData,
 );
 app.get(
   "/api/transaction-history",
   authenticateToken,
-  fileController.getTransactionHistory
+  fileController.getTransactionHistory,
 );
 app.get(
   "/api/get-single-row-data/:documentId",
   authenticateToken,
-  fileController.getSingleRowData
+  fileController.getSingleRowData,
 );
 app.put(
   "/api/update-sheet-data/:documentId",
   authenticateToken,
-  fileController.updateSheet
+  fileController.updateSheet,
 );
 app.post(
   "/api/create-excel-data",
   authenticateToken,
-  fileController.createExcelData
+  fileController.createExcelData,
 );
 app.get(
   "/api/manual-excel-data",
   authenticateToken,
-  fileController.getManualExcelData
+  fileController.getManualExcelData,
 );
 app.get("/api/user-files", authenticateToken, fileController.getUserFiles);
 app.get("/api/file-headers", authenticateToken, fileController.getFileHeaders);
 app.delete(
   "/api/delete-file/:documentId",
   authenticateToken,
-  fileController.deleteFile
+  fileController.deleteFile,
 );
 app.get(
   "/api/files/:uploadId/download",
-  fileController.downloadExcelByUploadId
+  fileController.downloadExcelByUploadId,
 );
 
 // Upload Management API Routes (protected)
 app.get(
   "/api/upload/status/:uploadId",
   authenticateToken,
-  fileController.getUploadStatus
+  fileController.getUploadStatus,
 );
 app.get(
   "/api/upload/sessions",
   authenticateToken,
-  fileController.getUserUploadSessions
+  fileController.getUserUploadSessions,
 );
 app.get(
   "/api/upload/files",
   authenticateToken,
-  fileController.getUploadFileSummaries
+  fileController.getUploadFileSummaries,
 );
 app.post(
   "/api/upload/resume/:uploadId",
   authenticateToken,
-  fileController.resumeUpload
+  fileController.resumeUpload,
 );
 app.delete(
   "/api/upload/cleanup",
   authenticateToken,
-  fileController.cleanupFailedUploads
+  fileController.cleanupFailedUploads,
 );
 app.delete(
   "/api/upload/delete/:uploadId",
   authenticateToken,
-  fileController.deleteUploadById
+  fileController.deleteUploadById,
 );
 app.post(
   "/api/upload/archive/:uploadId",
   authenticateToken,
-  fileController.archiveFile
+  fileController.archiveFile,
 );
 app.post(
   "/api/upload/unarchive/:uploadId",
   authenticateToken,
-  fileController.unarchiveFile
+  fileController.unarchiveFile,
 );
 
 // PayPal Payment API Routes (protected)
 app.post(
   "/api/paypal/process-payment",
   authenticateToken,
-  paypalController.processPayment
+  paypalController.processPayment,
 );
 app.post(
   "/api/paypal/process-bulk-payments",
   authenticateToken,
-  paypalController.processBulkPayments
+  paypalController.processBulkPayments,
 );
 app.get(
   "/api/paypal/payment-details/:documentId",
   authenticateToken,
-  paypalController.getPaymentDetails
+  paypalController.getPaymentDetails,
 );
 
 // PayPal Refund API Routes (protected)
 app.post(
   "/api/paypal/process-refund",
   authenticateToken,
-  paypalController.processRefund
+  paypalController.processRefund,
 );
 app.post(
   "/api/paypal/process-bulk-refunds",
   authenticateToken,
-  paypalController.processBulkRefunds
+  paypalController.processBulkRefunds,
 );
 app.get(
   "/api/paypal/refund/:refundId",
   authenticateToken,
-  paypalController.getRefundDetails
+  paypalController.getRefundDetails,
 );
 
 // Stripe Connect API Routes (protected)
 app.post(
   "/api/stripe/create-account",
   authenticateToken,
-  stripeController.createAccount
+  stripeController.createAccount,
 );
 app.get(
   "/api/stripe/accounts",
   authenticateToken,
-  stripeController.listAccounts
+  stripeController.listAccounts,
 );
 app.get(
   "/api/stripe/account/:accountId",
   authenticateToken,
-  stripeController.getAccountById
+  stripeController.getAccountById,
 );
 app.delete(
   "/api/stripe/account/:accountId",
   authenticateToken,
-  stripeController.deleteAccount
+  stripeController.deleteAccount,
 );
 app.post(
   "/api/stripe/payment",
   authenticateToken,
-  stripeController.createSinglePayment
+  stripeController.createSinglePayment,
 );
 
 // Stripe Refund API Route (protected)
 app.post(
   "/api/stripe/refund",
   authenticateToken,
-  stripeController.processStripeRefund
+  stripeController.processStripeRefund,
 );
 
 // Stripe Settings API Routes (protected)
 app.get(
   "/api/stripe/settings",
   authenticateToken,
-  stripeController.getStripeSettings
+  stripeController.getStripeSettings,
 );
 app.put(
   "/api/stripe/settings",
   authenticateToken,
-  stripeController.updateStripeSettings
+  stripeController.updateStripeSettings,
 );
 
 // Stripe Dispute API Routes (protected)
 app.get(
   "/api/stripe/disputes",
   authenticateToken,
-  stripeController.listDisputes
+  stripeController.listDisputes,
 );
 
 app.get(
   "/api/stripe/disputes/stats",
   authenticateToken,
-  stripeController.getDisputeStats
+  stripeController.getDisputeStats,
 );
 app.get(
   "/api/stripe/dispute/:disputeId",
   authenticateToken,
-  stripeController.getDisputeDetails
+  stripeController.getDisputeDetails,
 );
 app.post(
   "/api/stripe/upload-evidence",
   authenticateToken,
   uploadEvidence.single("evidence"),
-  stripeController.uploadDisputeEvidence
+  stripeController.uploadDisputeEvidence,
 );
 app.post(
   "/api/stripe/submit-evidence",
   authenticateToken,
   uploadEvidence.single("evidence"),
-  stripeController.submitDisputeEvidence
+  stripeController.submitDisputeEvidence,
 );
 
 // OTA API Routes (protected)
@@ -363,12 +396,162 @@ app.delete("/api/ota/:id", authenticateToken, otaController.deleteOTA);
 app.patch("/api/ota/:id/restore", authenticateToken, otaController.restoreOTA);
 app.post("/api/ota/seed", authenticateToken, otaController.seedOTAData);
 
+// Mount Swagger documentation at /api-docs
+app.use(
+  "/api-docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerDocument, {
+    customSiteTitle: "QuantumPay APIs",
+    swaggerOptions: {
+      persistAuthorization: true,
+    },
+  }),
+);
+
 // Admin API Routes (protected)
 app.get(
   "/api/admin/excel-data",
   authenticateToken,
-  paypalController.getAdminExcelData
+  paypalController.getAdminExcelData,
 );
+
+// QuantumPay Terminal Credentials Vault (protected)
+app.post(
+  "/api/terminal-credentials",
+  authenticateToken,
+  terminalCredentialController.createCredential,
+);
+app.get(
+  "/api/terminal-credentials",
+  authenticateToken,
+  terminalCredentialController.getCredentials,
+);
+app.get(
+  "/api/terminal-credentials/export",
+  authenticateToken,
+  terminalCredentialController.exportCredentials,
+);
+app.get(
+  "/api/terminal-credentials/:id",
+  authenticateToken,
+  terminalCredentialController.getCredentialById,
+);
+app.patch(
+  "/api/terminal-credentials/:id",
+  authenticateToken,
+  terminalCredentialController.updateCredential,
+);
+app.delete(
+  "/api/terminal-credentials/:id",
+  authenticateToken,
+  terminalCredentialController.deleteCredential,
+);
+// Use dedicated uploadChargeFiles multer for credential imports
+app.post(
+  "/api/terminal-credentials/import",
+  authenticateToken,
+  uploadChargeFiles.single("file"),
+  terminalCredentialController.importCredentials,
+);
+
+// QuantumPay Charge Processing (protected)
+app.post(
+  "/api/qp-charge-files/import",
+  authenticateToken,
+  uploadChargeFiles.single("file"),
+  qpChargeController.importChargeFile,
+);
+app.get(
+  "/api/qp-charge-files",
+  authenticateToken,
+  qpChargeController.getChargeFiles,
+);
+app.get(
+  "/api/qp-charge-files/:id",
+  authenticateToken,
+  qpChargeController.getChargeFileById,
+);
+app.patch(
+  "/api/qp-charge-files/:id",
+  authenticateToken,
+  qpChargeController.updateChargeFile,
+);
+app.delete(
+  "/api/qp-charge-files/:id",
+  authenticateToken,
+  qpChargeController.deleteChargeFile,
+);
+app.post(
+  "/api/qp-charge-files/:id/process",
+  authenticateToken,
+  qpChargeController.processChargeFile,
+);
+app.get(
+  "/api/qp-charge-files/:id/export",
+  authenticateToken,
+  qpChargeController.exportRawInstances,
+);
+app.get(
+  "/api/qp-charge-files/:id/download-compiled",
+  authenticateToken,
+  qpChargeController.downloadCompiledFile,
+);
+app.get(
+  "/api/qp-charge-files/:id/progress",
+  authenticateToken,
+  qpChargeController.getChargeFileProgress,
+);
+
+// QuantumPay Charge Instances (protected)
+app.get(
+  "/api/qp-charge-instances",
+  authenticateToken,
+  qpChargeController.getChargeInstances,
+);
+app.get(
+  "/api/qp-charge-instances/export",
+  authenticateToken,
+  qpChargeController.exportChargeInstances,
+);
+app.get(
+  "/api/qp-charge-instances/:id",
+  authenticateToken,
+  qpChargeController.getChargeInstanceById,
+);
+app.patch(
+  "/api/qp-charge-instances/:id",
+  authenticateToken,
+  qpChargeController.updateChargeInstance,
+);
+app.delete(
+  "/api/qp-charge-instances/:id",
+  authenticateToken,
+  qpChargeController.deleteChargeInstance,
+);
+app.post(
+  "/api/qp-charge-instances/:id/process",
+  authenticateToken,
+  qpChargeController.processChargeInstance,
+);
+// Process a custom list of instances by ID
+app.post(
+  "/api/qp-charge-instances/process",
+  authenticateToken,
+  qpChargeController.processMultipleInstances,
+);
+
+// QuantumPay Traceability & Logs (protected)
+app.get(
+  "/api/qp-payment-attempts",
+  authenticateToken,
+  qpLogController.getPaymentAttempts,
+);
+app.get(
+  "/api/qp-payment-attempts/:id",
+  authenticateToken,
+  qpLogController.getPaymentAttemptById,
+);
+app.get("/api/system-logs", authenticateToken, qpLogController.getSystemLogs);
 
 // Health check route
 app.get("/api/health", (req, res) => {
