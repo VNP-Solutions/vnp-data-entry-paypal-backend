@@ -371,11 +371,11 @@ exports.getChargeFileById = catchAsync(async (req, res, next) => {
   res.status(200).json({ status: "success", data: file });
 });
 
-// MARK: 4. Get Charge Instances with filters
-// 4. Get Charge Instances with enhanced filters
+// MARK: 4. Get Charge Instances with filters, search, pagination, and aggregate stats
 exports.getChargeInstances = catchAsync(async (req, res, next) => {
   const {
     charge_file_id,
+    chargeFileId, // frontend sends camelCase
     hotel_id,
     reservation_id,
     status,
@@ -384,29 +384,95 @@ exports.getChargeInstances = catchAsync(async (req, res, next) => {
     portfolio,
     date_from,
     date_to,
+    search,
+    page = 1,
+    limit = 20,
   } = req.query;
 
   const match = { deleted_at: null };
-  if (charge_file_id) match.charge_file_id = charge_file_id;
+  const fileId = charge_file_id || chargeFileId;
+  if (fileId) match.charge_file_id = fileId;
   if (hotel_id) match.hotel_id = hotel_id;
   if (reservation_id) match.reservation_id = reservation_id;
-  if (status) match.status = status;
+  // Normalize status to uppercase to match schema enum (e.g. DECLINED, PENDING)
+  if (status) match.status = String(status).toUpperCase();
   if (ota) match.ota = ota;
   if (vnp_work_id) match.vnp_work_id = vnp_work_id;
   if (portfolio) match.portfolio = portfolio;
 
-  // Date range filtering
   if (date_from || date_to) {
     match.createdAt = {};
     if (date_from) match.createdAt.$gte = new Date(date_from);
     if (date_to) match.createdAt.$lte = new Date(date_to);
   }
 
-  const instances = await QPChargeInstance.find(match)
-    .select("-card_number -cvv") // Never return PAN
-    .sort({ row_number: 1 });
+  // Text search across hotel_id, reservation_id, user_id (case-insensitive)
+  if (search && String(search).trim()) {
+    const term = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(term, "i");
+    match.$or = [
+      { hotel_id: re },
+      { reservation_id: re },
+      { user_id: re },
+    ];
+  }
 
-  res.status(200).json({ status: "success", data: instances });
+  const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 20));
+
+  // Stats aggregation (same filter, no pagination)
+  const statsAgg = await QPChargeInstance.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: null,
+        totalCount: { $sum: 1 },
+        totalAmount: { $sum: { $ifNull: ["$amount_numeric", 0] } },
+        hotelIds: { $addToSet: "$hotel_id" },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        totalCount: 1,
+        totalAmount: 1,
+        uniqueHotels: { $size: "$hotelIds" },
+      },
+    },
+  ]);
+
+  const stats = statsAgg[0] || {
+    totalCount: 0,
+    totalAmount: 0,
+    uniqueHotels: 0,
+  };
+  const totalCount = stats.totalCount;
+  const totalPages = Math.max(1, Math.ceil(totalCount / limitNum));
+
+  // Paginated rows with find (consistent with same match)
+  const rows = await QPChargeInstance.find(match)
+    .select("-card_number -cvv")
+    .sort({ row_number: 1 })
+    .skip((pageNum - 1) * limitNum)
+    .limit(limitNum)
+    .lean();
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      rows,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalCount,
+        limit: limitNum,
+      },
+      stats: {
+        uniqueHotels: stats.uniqueHotels,
+        totalAmount: stats.totalAmount,
+      },
+    },
+  });
 });
 
 // MARK: 5. Delete Charge File (Soft)
