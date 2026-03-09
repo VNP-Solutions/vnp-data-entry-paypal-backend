@@ -197,31 +197,19 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
   return instance;
 };
 
-// MARK: 1. Import Charging Sheet
-// 1. Import charging sheet
-exports.importChargeFile = catchAsync(async (req, res, next) => {
-  const reqId = generateRequestId();
-  const userId = req.user?.userId || req.userData?._id;
+// MARK: 1. Import Charging Sheet (shared logic from path)
+// Import QP charge file from a local file path. Used by both the API handler and the unified upload flow.
+async function importChargeFileFromPath(filePath, userId, originalFileName) {
+  const isXlsx = originalFileName.toLowerCase().endsWith(".xlsx");
 
-  if (!req.file) {
-    return res
-      .status(400)
-      .json({ status: "error", message: "File is required" });
-  }
-
-  const fileName = req.file.originalname;
-  const isXlsx = fileName.toLowerCase().endsWith(".xlsx");
-
-  // Create QPChargeFile entry
   const chargeFile = await QPChargeFile.create({
-    file_name: fileName,
+    file_name: originalFileName,
     file_type: isXlsx ? "XLSX" : "CSV",
-    storage_path: req.file.path,
+    storage_path: filePath,
     created_by: userId,
   });
 
-  // Read excel
-  const workbook = xlsx.readFile(req.file.path);
+  const workbook = xlsx.readFile(filePath);
   const sheetName = workbook.SheetNames[0];
   const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
     defval: "",
@@ -235,7 +223,12 @@ exports.importChargeFile = catchAsync(async (req, res, next) => {
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const instance = mapRowToInstance(row, chargeFile._id, i + 1, fileName);
+    const instance = mapRowToInstance(
+      row,
+      chargeFile._id,
+      i + 1,
+      originalFileName,
+    );
     instance.created_by = userId;
 
     if (instance.status === "INVALID") invalidRows++;
@@ -244,7 +237,6 @@ exports.importChargeFile = catchAsync(async (req, res, next) => {
     instancesToInsert.push(instance);
   }
 
-  // Check for duplicates within the same file by charge_key
   const keyMap = new Set();
   const keyToIndices = new Map();
 
@@ -262,54 +254,68 @@ exports.importChargeFile = catchAsync(async (req, res, next) => {
     }
   });
 
-  // Check for existing SUCCESS charges across previous runs (cross-file duplicates)
   for (let [chargeKey, indices] of keyToIndices.entries()) {
     const existingSuccess = await QPChargeInstance.findOne({
       charge_key: chargeKey,
       status: "SUCCESS",
       deleted_at: null,
-      charge_file_id: { $ne: chargeFile._id }, // Different file
+      charge_file_id: { $ne: chargeFile._id },
     });
 
     if (existingSuccess) {
-      // Mark all instances with this key as SKIPPED (already charged in previous run)
       indices.forEach((idx) => {
         const inst = instancesToInsert[idx];
         inst.status = "SKIPPED";
         inst.status_reason = `Already charged in previous run (${existingSuccess.charge_file_id}). Charge Key: ${chargeKey}`;
         inst.is_duplicate = true;
-
-        // Move from validRows to skipped count (handled elsewhere)
-        validRows--; // Decrement valid since it's now skipped
-        invalidRows++; // Increment invalid count for tracking
+        validRows--;
+        invalidRows++;
       });
     }
   }
 
   if (instancesToInsert.length > 0) {
-    // Insert heavily
     await QPChargeInstance.insertMany(instancesToInsert);
   }
 
-  // Update file counts
   chargeFile.total_rows = totalRows;
   chargeFile.valid_rows = validRows;
   chargeFile.invalid_rows = invalidRows;
   chargeFile.status = "IMPORTED";
   await chargeFile.save();
 
+  return chargeFile;
+}
+
+// MARK: 1b. Import Charging Sheet (HTTP handler)
+exports.importChargeFile = catchAsync(async (req, res, next) => {
+  const reqId = generateRequestId();
+  const userId = req.user?.userId || req.userData?._id;
+
+  if (!req.file) {
+    return res
+      .status(400)
+      .json({ status: "error", message: "File is required" });
+  }
+
+  const chargeFile = await importChargeFileFromPath(
+    req.file.path,
+    userId,
+    req.file.originalname,
+  );
+
   TraceLogger.info(
     "CHARGE_FILE_IMPORT",
-    `Imported charge file ${fileName} with ${totalRows} rows`,
+    `Imported charge file ${req.file.originalname} with ${chargeFile.total_rows} rows`,
     {
       request_id: reqId,
       actor_user_id: userId,
       entity_type: "QPChargeFile",
       entity_id: chargeFile._id,
       metadata: {
-        total_rows: totalRows,
-        valid_rows: validRows,
-        invalid_rows: invalidRows,
+        total_rows: chargeFile.total_rows,
+        valid_rows: chargeFile.valid_rows,
+        invalid_rows: chargeFile.invalid_rows,
       },
     },
   );
@@ -318,12 +324,14 @@ exports.importChargeFile = catchAsync(async (req, res, next) => {
     status: "success",
     data: {
       id: chargeFile._id,
-      total_rows: totalRows,
-      valid_rows: validRows,
-      invalid_rows: invalidRows,
+      total_rows: chargeFile.total_rows,
+      valid_rows: chargeFile.valid_rows,
+      invalid_rows: chargeFile.invalid_rows,
     },
   });
 });
+
+exports.importChargeFileFromPath = importChargeFileFromPath;
 
 // MARK: 2. Get Charge Files
 // 2. Get Charge Files with filters

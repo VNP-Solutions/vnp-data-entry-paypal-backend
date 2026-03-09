@@ -84,8 +84,14 @@ const uploadSessionSchema = new mongoose.Schema(
     // Payment Gateway
     paymentGateway: {
       type: String,
-      enum: ["paypal", "stripe"],
+      enum: ["paypal", "stripe", "qp"],
       default: "paypal",
+    },
+    // When paymentGateway is "qp", links to the QPChargeFile created by QP import
+    linkedQpChargeFileId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "QPChargeFile",
+      default: null,
     },
     archive: {
       type: Boolean,

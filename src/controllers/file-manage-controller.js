@@ -1,13 +1,18 @@
 const mongoose = require("mongoose");
 const XLSX = require("xlsx");
+const path = require("path");
+const fs = require("fs-extra");
 const ExcelData = require("../models/ExcelData");
 const StripeExcelData = require("../models/StripeExcelData");
 const OTA = require("../models/OTA");
 const UploadSession = require("../models/UploadSession");
+const QPChargeFile = require("../models/QPChargeFile");
+const QPChargeInstance = require("../models/QPChargeInstance");
 const { upload, s3Service } = require("../config/s3");
 const { encryptCardData, decryptCardData } = require("../utils/encryption");
 const User = require("../models/User");
 const ExcelJS = require("exceljs");
+const { importChargeFileFromPath } = require("./qp-charge-controller");
 
 // Generate unique upload ID
 function generateUploadId() {
@@ -444,6 +449,21 @@ function normalizeCardExpiry(cardExpire) {
   return cardExpire;
 }
 
+// Detect if file is QuantumPay charge format (columns typical of QP charge sheets)
+function isQPChargeFormat(headers) {
+  const lower = headers.map((h) => (h || "").toLowerCase());
+  const hasOtaOrVnp =
+    lower.some((h) => h.includes("ota")) ||
+    lower.some((h) => h.includes("vnp work id") || h === "vnp work id");
+  const hasAmount = lower.some(
+    (h) => h.includes("amount to charge") || h === "amount to charge",
+  );
+  const hasCard = lower.some(
+    (h) => h.includes("card number") || h === "card number",
+  );
+  return !!(hasOtaOrVnp && hasAmount && hasCard);
+}
+
 // Optimized upload file API - returns immediately and processes in background
 const uploadFile = async (req, res) => {
   try {
@@ -488,29 +508,23 @@ const uploadFile = async (req, res) => {
       });
     }
 
-    // Download file from S3 for processing (done once, used for validation and background processing)
+    // Download file from S3 for processing
     const fileBuffer = await s3Service.downloadFile(req.file.key);
 
-    // Quick validation - read just the first row
     const workbook = XLSX.read(fileBuffer);
     const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-    const cellA1 = firstSheet["A1"] ? firstSheet["A1"].v : null;
-
-    // Validate file format
-    if (cellA1 !== "Expedia ID") {
+    const range = firstSheet["!ref"];
+    if (!range) {
       await s3Service.deleteFile(req.file.key);
       return res.status(400).json({
         status: "error",
-        message: 'Invalid VNP Work file. Cell A1 must contain "Expedia ID"',
+        message: "Invalid or empty sheet",
       });
     }
-
-    // Get basic file info for immediate response
-    const range = firstSheet["!ref"];
     const totalRows = XLSX.utils.decode_range(range).e.r + 1;
     const totalCols = XLSX.utils.decode_range(range).e.c + 1;
 
-    // Get headers
+    // Get headers for format detection
     const headers = [];
     for (let col = 0; col < totalCols; col++) {
       const cell = firstSheet[XLSX.utils.encode_cell({ r: 0, c: col })];
@@ -520,10 +534,80 @@ const uploadFile = async (req, res) => {
       }
     }
 
-    // Auto-detect payment gateway
-    const paymentGateway = headers.includes("Connected Account")
-      ? "stripe"
-      : "paypal";
+    // Auto-detect payment gateway: Stripe -> QP -> PayPal
+    let paymentGateway;
+    if (headers.includes("Connected Account")) {
+      paymentGateway = "stripe";
+    } else if (isQPChargeFormat(headers)) {
+      paymentGateway = "qp";
+    } else {
+      paymentGateway = "paypal";
+    }
+
+    // QP path: run QP import and create a linked UploadSession
+    if (paymentGateway === "qp") {
+      const tempDir = path.join(__dirname, "..", "public", "temp");
+      await fs.ensureDir(tempDir);
+      const tempPath = path.join(
+        tempDir,
+        `qp_${Date.now()}_${path.basename(originalFileName)}`,
+      );
+      try {
+        await fs.writeFile(tempPath, fileBuffer);
+        const chargeFile = await importChargeFileFromPath(
+          tempPath,
+          userId,
+          originalFileName,
+        );
+        const uploadId = generateUploadId();
+        const uploadSession = new UploadSession({
+          uploadId,
+          userId,
+          fileName,
+          originalFileName,
+          s3Key: req.file.key,
+          totalRows: chargeFile.total_rows,
+          processedRows: chargeFile.processed_rows,
+          status: "completed",
+          completedAt: new Date(),
+          vnpWorkId: vnpWorkId || null,
+          headers,
+          batchSize: 500,
+          paymentGateway: "qp",
+          linkedQpChargeFileId: chargeFile._id,
+          ota: null,
+          otaId: null,
+        });
+        await uploadSession.save();
+        console.log(
+          `\x1b[34m🚀 QP UPLOAD: File "${fileName}" -> QPChargeFile ${chargeFile._id}, ${chargeFile.total_rows} rows\x1b[0m`,
+        );
+        return res.status(202).json({
+          status: "success",
+          message:
+            "QP charge file imported successfully. View and process in QP Payment.",
+          data: {
+            uploadId,
+            fileName,
+            totalRows: chargeFile.total_rows,
+            paymentGateway: "qp",
+            linkedQpChargeFileId: chargeFile._id,
+          },
+        });
+      } finally {
+        await fs.remove(tempPath).catch(() => {});
+      }
+    }
+
+    // PayPal/Stripe: require Expedia ID in A1
+    const cellA1 = firstSheet["A1"] ? firstSheet["A1"].v : null;
+    if (cellA1 !== "Expedia ID") {
+      await s3Service.deleteFile(req.file.key);
+      return res.status(400).json({
+        status: "error",
+        message: 'Invalid VNP Work file. Cell A1 must contain "Expedia ID"',
+      });
+    }
 
     // Generate unique upload ID
     const uploadId = generateUploadId();
@@ -1117,29 +1201,52 @@ const deleteUploadById = async (req, res) => {
       });
     }
 
-    // Choose the appropriate model based on the upload session's payment gateway
-    const DataModel =
-      uploadSession.paymentGateway === "stripe" ? StripeExcelData : ExcelData;
+    const paymentGateway = uploadSession.paymentGateway || "paypal";
+    let recordCount = 0;
+    let excelDataDeleteResult = { deletedCount: 0 };
 
-    // Count how many records will be deleted for confirmation
-    const recordCount = await DataModel.countDocuments({
-      uploadId: uploadId,
-    });
-
-    console.log(
-      `\x1b[36m🗑️  Deleting upload: Upload ID ${uploadId} with ${recordCount} records (${uploadSession.paymentGateway.toUpperCase()})\x1b[0m`
-    );
-
-    // Delete all data records for this upload
-    const excelDataDeleteResult = await DataModel.deleteMany(
-      {
+    if (paymentGateway === "qp" && uploadSession.linkedQpChargeFileId) {
+      // QP session: soft-delete the linked QP charge file and its instances
+      const qpFile = await QPChargeFile.findById(
+        uploadSession.linkedQpChargeFileId,
+      ).session(session);
+      if (qpFile) {
+        recordCount = qpFile.total_rows || 0;
+        qpFile.deleted_at = new Date();
+        qpFile.deleted_by = req.user?.userId;
+        await qpFile.save({ session });
+        await QPChargeInstance.updateMany(
+          { charge_file_id: qpFile._id },
+          {
+            $set: {
+              deleted_at: new Date(),
+              deleted_by: req.user?.userId,
+            },
+          },
+          { session },
+        );
+        excelDataDeleteResult = { deletedCount: recordCount };
+      }
+      console.log(
+        `\x1b[36m🗑️  Deleting QP upload: Upload ID ${uploadId}, linked QPChargeFile ${uploadSession.linkedQpChargeFileId}\x1b[0m`,
+      );
+    } else {
+      const DataModel =
+        paymentGateway === "stripe" ? StripeExcelData : ExcelData;
+      recordCount = await DataModel.countDocuments({
         uploadId: uploadId,
-      },
-      { session }
-    );
+      });
+      console.log(
+        `\x1b[36m🗑️  Deleting upload: Upload ID ${uploadId} with ${recordCount} records (${paymentGateway.toUpperCase()})\x1b[0m`,
+      );
+      excelDataDeleteResult = await DataModel.deleteMany(
+        { uploadId: uploadId },
+        { session },
+      );
+    }
 
     console.log(
-      `\x1b[32m✅ DELETE SUCCESS: Removed ${excelDataDeleteResult.deletedCount}/${recordCount} records from database\x1b[0m`
+      `\x1b[32m✅ DELETE SUCCESS: Removed ${excelDataDeleteResult.deletedCount}/${recordCount} records from database\x1b[0m`,
     );
 
     // Delete the upload session
@@ -1324,45 +1431,75 @@ const getUserUploadSessions = async (req, res) => {
 
     const total = await UploadSession.countDocuments(query);
 
-    // Add chargedCount for each session
+    // Add chargedCount and QP progress for each session
     const chargedCounts = await Promise.all(
       sessions.map(async (session) => {
         const paymentGateway = session.paymentGateway || "paypal";
+        if (paymentGateway === "qp" && session.linkedQpChargeFileId) {
+          const qpFile = await QPChargeFile.findById(
+            session.linkedQpChargeFileId,
+          ).lean();
+          return qpFile ? qpFile.success_count || 0 : 0;
+        }
         const DataModel =
           paymentGateway === "stripe" ? StripeExcelData : ExcelData;
-
         return await DataModel.countDocuments({
           uploadId: session.uploadId,
           "Charge status": "Charged",
         });
-      })
+      }),
+    );
+
+    // For QP sessions, use linked file's total/processed for display
+    const sessionsWithQP = await Promise.all(
+      sessions.map(async (session, idx) => {
+        const paymentGateway = session.paymentGateway || "paypal";
+        let totalRows = session.totalRows;
+        let processedRows = session.processedRows;
+        if (paymentGateway === "qp" && session.linkedQpChargeFileId) {
+          const qpFile = await QPChargeFile.findById(
+            session.linkedQpChargeFileId,
+          ).lean();
+          if (qpFile) {
+            totalRows = qpFile.total_rows || 0;
+            processedRows = qpFile.processed_rows || 0;
+          }
+        }
+        return {
+          ...session.toObject(),
+          _totalRows: totalRows,
+          _processedRows: processedRows,
+          _chargedCount: chargedCounts[idx],
+        };
+      }),
     );
 
     res.status(200).json({
       status: "success",
       data: {
-        sessions: sessions.map((session, idx) => ({
-          uploadId: session.uploadId,
-          fileName: session.fileName,
-          status: session.status,
-          totalRows: session.totalRows,
-          processedRows: session.processedRows,
+        sessions: sessionsWithQP.map((s) => ({
+          uploadId: s.uploadId,
+          fileName: s.fileName,
+          status: s.status,
+          totalRows: s._totalRows,
+          processedRows: s._processedRows,
           progress:
-            session.status === "completed"
+            s.status === "completed"
               ? 100
-              : session.totalRows > 0
-              ? Math.round((session.processedRows / session.totalRows) * 100)
-              : 0,
-          startedAt: session.startedAt,
-          completedAt: session.completedAt,
-          chargedCount: chargedCounts[idx],
-          paymentGateway: session.paymentGateway || "paypal",
-          archive: session.archive || false,
+              : s._totalRows > 0
+                ? Math.round((s._processedRows / s._totalRows) * 100)
+                : 0,
+          startedAt: s.startedAt,
+          completedAt: s.completedAt,
+          chargedCount: s._chargedCount,
+          paymentGateway: s.paymentGateway || "paypal",
+          linkedQpChargeFileId: s.linkedQpChargeFileId || null,
+          archive: s.archive || false,
           uploadedBy: {
-            userId: session.userId._id,
-            email: session.userId.email,
+            userId: s.userId._id,
+            email: s.userId.email,
             name:
-              session.userId.name || session.userId.username || "Unknown User",
+              s.userId.name || s.userId.username || "Unknown User",
           },
         })),
         pagination: {
