@@ -543,11 +543,12 @@ exports.updateChargeInstance = catchAsync(async (req, res, next) => {
     return res.status(404).json({ status: "error", message: "Not found" });
   }
 
-  // Allow limited edits only when in PENDING or INVALID state
-  if (!["PENDING", "INVALID"].includes(instance.status)) {
+  // Allow limited edits when PENDING, INVALID, DECLINED, or ERROR (so user can fix and retry)
+  if (!["PENDING", "INVALID", "DECLINED", "ERROR"].includes(instance.status)) {
     return res.status(400).json({
       status: "error",
-      message: "Can only edit instances in PENDING or INVALID status",
+      message:
+        "Can only edit instances in PENDING, INVALID, DECLINED, or ERROR status",
     });
   }
 
