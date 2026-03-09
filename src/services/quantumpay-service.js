@@ -175,19 +175,49 @@ exports.processCharge = async (
   try {
     const bearerToken = await getBearerToken();
 
-    const rawRes = await fetch(`${QP_API_URL}/creditcard/sale`, {
-      method: "POST",
+    const url = `${QP_API_URL}/creditcard/sale`;
+    const requestHeaders = {
+      "X-TERMINAL-KEY": terminalKey,
+      Authorization: `Bearer ${bearerToken}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": reqId, // Add idempotency to prevent duplicate charges on retry
+    };
+
+    // Console diagnostics for single-instance processing (avoid leaking secrets)
+    console.log("[QuantumPay] request", {
+      request_id: reqId,
+      url,
       headers: {
-        "X-TERMINAL-KEY": terminalKey,
-        Authorization: `Bearer ${bearerToken}`,
-        "Content-Type": "application/json",
-        "Idempotency-Key": reqId, // Add idempotency to prevent duplicate charges on retry
+        ...requestHeaders,
+        Authorization: "Bearer [REDACTED]",
+        "X-TERMINAL-KEY":
+          typeof terminalKey === "string" && terminalKey.length > 8
+            ? `${terminalKey.slice(0, 4)}…${terminalKey.slice(-4)}`
+            : "[REDACTED]",
       },
+      payload: redacted,
+    });
+
+    const rawRes = await fetch(url, {
+      method: "POST",
+      headers: requestHeaders,
       body: JSON.stringify(payload),
     });
 
     responseStatusCode = rawRes.status;
-    responseBody = await rawRes.json();
+    const responseText = await rawRes.text();
+    try {
+      responseBody = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      responseBody = responseText;
+    }
+
+    console.log("[QuantumPay] response", {
+      request_id: reqId,
+      status: rawRes.status,
+      statusText: rawRes.statusText,
+      body: responseBody,
+    });
 
     // Map HTTP status code + response body to standard result
     // First check response body status field (QuantumPay specific)

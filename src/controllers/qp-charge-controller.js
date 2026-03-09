@@ -86,78 +86,78 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     instance.card_last4 = fullPan.slice(-4);
   }
 
-  const expire = getVal("Card Expire", "expire", "Exp");
+  function excelDateToJSDate(excelDate) {
+    const daysSinceEpoch = excelDate - 25569;
+    const milliseconds = daysSinceEpoch * 86400 * 1000;
+    const jsDate = new Date(Math.round(milliseconds));
+
+    return jsDate;
+  }
+
+  let excelExpireDate = getVal(
+    "Card Expire",
+    "Card Expire MM/YY",
+    "Expire",
+    "Exp",
+  );
+  const expire =
+    excelDateToJSDate(excelExpireDate).getTime() > 0
+      ? excelDateToJSDate(excelExpireDate)
+      : excelExpireDate; // Try Excel date first, fallback to string parsing
   if (expire) {
-    // Enhanced expiry date parsing to support multiple formats:
-    // MM/YY, MM/YYYY, MM-YY, MM-YYYY, YYYY-MM, YY/MM
     const parseExpiryDate = (expiryStr) => {
       if (!expiryStr) return { month: null, year: null };
 
-      const str = String(expiryStr).trim();
       const result = { month: null, year: null };
 
-      // Try different separators
+      // If we already have a JS Date (e.g., converted from Excel), use it directly.
+      if (expiryStr instanceof Date && !isNaN(expiryStr.getTime())) {
+        result.month = expiryStr.getUTCMonth() + 1;
+        result.year = expiryStr.getUTCFullYear() % 100; // store 2-digit year
+        return result;
+      }
+
+      const str = String(expiryStr).trim();
+
+      // ISO date-like string: YYYY-MM-...
+      const isoMatch = str.match(/^(\d{4})-(\d{2})/);
+      if (isoMatch) {
+        const year4 = parseInt(isoMatch[1], 10);
+        const month2 = parseInt(isoMatch[2], 10);
+        if (!isNaN(month2) && month2 >= 1 && month2 <= 12)
+          result.month = month2;
+        if (!isNaN(year4) && year4 >= 2000 && year4 <= 2099)
+          result.year = year4 % 100;
+        return result;
+      }
+
+      // Split by delimiter (/ or -)
       let parts = [];
       if (str.includes("/")) {
         parts = str.split("/");
       } else if (str.includes("-")) {
         parts = str.split("-");
       } else {
-        // Try extracting first 2 and last 2
-        parts = [str.slice(0, 2), str.slice(-2)];
+        parts = [str]; // Single value, no split
       }
 
-      if (parts.length < 2) return result;
+      // Extract last two parts and parse as integers
+      if (parts.length >= 2) {
+        // Take second-to-last as month, last as year
+        const monthPart = parseInt(parts[parts.length - 2], 10);
+        const yearPart = parseInt(parts[parts.length - 1], 10);
 
-      // handle month names like "Feb" or "February"
-      const monthMap = {
-        jan: 1,
-        feb: 2,
-        mar: 3,
-        apr: 4,
-        may: 5,
-        jun: 6,
-        jul: 7,
-        aug: 8,
-        sep: 9,
-        oct: 10,
-        nov: 11,
-        dec: 12,
-      };
+        if (!isNaN(monthPart) && monthPart >= 1 && monthPart <= 12) {
+          result.month = monthPart;
+        }
 
-      const parsePart = (p) => {
-        const num = parseInt(p, 10);
-        if (!isNaN(num)) return num;
-        const key = String(p).trim().toLowerCase().slice(0, 3);
-        return monthMap[key] || NaN;
-      };
-
-      let potential_month = parsePart(parts[0]);
-      let potential_year = parsePart(parts[1]);
-
-      // Detect which is month and which is year
-      // If first part is > 12, it's probably year (e.g., 2025)
-      if (potential_month > 12 && potential_year <= 12) {
-        [potential_month, potential_year] = [potential_year, potential_month];
-      }
-
-      // Validate month
-      if (
-        !isNaN(potential_month) &&
-        potential_month >= 1 &&
-        potential_month <= 12
-      ) {
-        result.month = potential_month;
-      }
-
-      // Validate and normalize year
-      if (!isNaN(potential_year)) {
-        if (potential_year >= 0 && potential_year <= 99) {
-          // 2-digit year: assume 20xx
-          result.year = 2000 + potential_year;
-        } else if (potential_year >= 2000 && potential_year <= 2099) {
-          // 4-digit year
-          result.year = potential_year;
+        // Normalize year: if 2-digit (0-99), assume 20xx but store as 2 digits
+        if (!isNaN(yearPart)) {
+          if (yearPart >= 0 && yearPart <= 99) {
+            result.year = yearPart; // Keep as 2 digits
+          } else if (yearPart >= 2000 && yearPart <= 2099) {
+            result.year = yearPart % 100; // Convert 4-digit to 2-digit
+          }
         }
       }
 
