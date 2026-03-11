@@ -497,6 +497,11 @@ app.get(
   qpChargeController.downloadCompiledFile,
 );
 app.get(
+  "/api/qp-charge-files/:id/download-report",
+  authenticateToken,
+  qpChargeController.downloadReport,
+);
+app.get(
   "/api/qp-charge-files/:id/progress",
   authenticateToken,
   qpChargeController.getChargeFileProgress,
@@ -512,6 +517,11 @@ app.get(
   "/api/qp-charge-instances/export",
   authenticateToken,
   qpChargeController.exportChargeInstances,
+);
+app.post(
+  "/api/qp-charge-instances/create-and-process",
+  authenticateToken,
+  qpChargeController.createAndProcessSingle,
 );
 app.get(
   "/api/qp-charge-instances/:id",

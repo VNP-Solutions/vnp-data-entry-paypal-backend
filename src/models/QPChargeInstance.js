@@ -68,6 +68,9 @@ const qpChargeInstanceSchema = new mongoose.Schema({
   requested_at: { type: Date },
   completed_at: { type: Date },
 
+  // Full QP response (for details modal)
+  last_response_payload: { type: mongoose.Schema.Types.Mixed },
+
   // Standard Tracking
   created_by: {
     type: mongoose.Schema.Types.ObjectId,

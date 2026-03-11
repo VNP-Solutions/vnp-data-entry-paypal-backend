@@ -182,6 +182,29 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     )
     .digest("hex");
 
+  // Partial file upload: read status from file if present (e.g. re-upload of half-processed file)
+  const statusFromFile = getVal(
+    "Charge Status",
+    "Status",
+    "charge status",
+    "Charge status",
+  );
+  const allowedStatuses = [
+    "PENDING",
+    "PROCESSING",
+    "SUCCESS",
+    "DECLINED",
+    "ERROR",
+    "INVALID",
+    "SKIPPED",
+  ];
+  if (statusFromFile) {
+    const normalized = String(statusFromFile).trim().toUpperCase();
+    if (allowedStatuses.includes(normalized)) {
+      instance.status = normalized;
+    }
+  }
+
   // Basic Validation
   if (
     !instance.hotel_id ||
@@ -617,14 +640,17 @@ exports.updateChargeInstance = catchAsync(async (req, res, next) => {
     return res.status(404).json({ status: "error", message: "Not found" });
   }
 
-  // Allow limited edits when PENDING, INVALID, DECLINED, or ERROR (so user can fix and retry)
-  if (!["PENDING", "INVALID", "DECLINED", "ERROR"].includes(instance.status)) {
-    return res.status(400).json({
-      status: "error",
-      message:
-        "Can only edit instances in PENDING, INVALID, DECLINED, or ERROR status",
-    });
-  }
+  const allowedStatuses = [
+    "PENDING",
+    "PROCESSING",
+    "SUCCESS",
+    "DECLINED",
+    "ERROR",
+    "INVALID",
+    "SKIPPED",
+  ];
+  const canEditPayload =
+    ["PENDING", "INVALID", "DECLINED", "ERROR"].includes(instance.status);
 
   const {
     billing_address,
@@ -632,8 +658,30 @@ exports.updateChargeInstance = catchAsync(async (req, res, next) => {
     currency,
     expiry_month,
     expiry_year,
+    status: bodyStatus,
+    status_reason: bodyStatusReason,
   } = req.body;
 
+  // Status and status_reason: always allowed (for state correction)
+  if (bodyStatus !== undefined) {
+    const s = String(bodyStatus).toUpperCase();
+    if (!allowedStatuses.includes(s)) {
+      return res.status(400).json({
+        status: "error",
+        message: `status must be one of: ${allowedStatuses.join(", ")}`,
+      });
+    }
+    instance.status = s;
+  }
+  if (bodyStatusReason !== undefined) {
+    instance.status_reason =
+      typeof bodyStatusReason === "string"
+        ? bodyStatusReason
+        : String(bodyStatusReason);
+  }
+
+  // Amount, address, expiry: only apply when instance is in editable state
+  if (canEditPayload) {
   // Validate amount_numeric if provided
   if (amount_numeric !== undefined) {
     if (typeof amount_numeric !== "number" || amount_numeric <= 0) {
@@ -714,6 +762,7 @@ exports.updateChargeInstance = catchAsync(async (req, res, next) => {
       ...sanitizedAddr,
     };
   }
+  }
 
   instance.updated_by = userId;
   await instance.save();
@@ -761,46 +810,87 @@ exports.deleteChargeInstance = catchAsync(async (req, res, next) => {
   res.status(200).json({ status: "success", message: "Deleted successfully" });
 });
 
-// MARK: 5f. Export Filtered Charge Instances
-// 5f. Export Filtered Charge Instances
+// MARK: Helper – instance to parent-file-style export row (with decrypted card)
+function instanceToExportRow(i) {
+  let cardNumber = "";
+  if (i.card_number) {
+    try {
+      cardNumber = decrypt(i.card_number);
+    } catch {
+      cardNumber = "***";
+    }
+  }
+  const cardExpire =
+    i.expiry_month && i.expiry_year != null
+      ? `${String(i.expiry_month).padStart(2, "0")}/${String(i.expiry_year).slice(-2).padStart(2, "0")}`
+      : "";
+  return {
+    "Expedia ID": i.hotel_id,
+    "Reservation ID": i.reservation_id,
+    "Amount to charge": i.amount_numeric,
+    Currency: i.currency,
+    "Address 1": i.billing_address?.address_1,
+    "Address 2": i.billing_address?.address_2,
+    City: i.billing_address?.city,
+    State: i.billing_address?.state,
+    Zip: i.billing_address?.postal_code,
+    Country: i.billing_address?.country_code,
+    "Card Number": cardNumber,
+    "Card Expire": cardExpire,
+    OTA: i.ota,
+    "VNP Work ID": i.vnp_work_id,
+    Portfolio: i.portfolio,
+    "User ID": i.user_id,
+    "Charge Status": i.status,
+    "Status Reason": i.status_reason,
+    "Provider Txn ID": i.provider_transaction_id,
+    "Processed At": i.completed_at
+      ? new Date(i.completed_at).toISOString()
+      : "",
+  };
+}
+
+// MARK: 5f. Export Filtered Charge Instances (XLSX, parent-file style, full card)
 exports.exportChargeInstances = catchAsync(async (req, res, next) => {
   const reqId = generateRequestId();
   const userId = req.user?.userId;
-  const { charge_file_id, status } = req.query;
+  const { charge_file_id, status, ids } = req.query;
 
   const match = { deleted_at: null };
   if (charge_file_id) match.charge_file_id = charge_file_id;
   if (status) match.status = status;
+  if (ids) {
+    const idList = (typeof ids === "string" ? ids.split(",") : Array.isArray(ids) ? ids : [])
+      .map((id) => String(id).trim())
+      .filter(Boolean);
+    if (idList.length > 0) match._id = { $in: idList };
+  }
 
-  const instances = await QPChargeInstance.find(match).sort({ row_number: 1 });
+  const instances = await QPChargeInstance.find(match)
+    .sort({ row_number: 1 })
+    .lean();
 
-  const mapped = instances.map((i) => ({
-    RowNumber: i.row_number,
-    HotelID: i.hotel_id,
-    ReservationID: i.reservation_id,
-    Amount: i.amount_numeric,
-    Currency: i.currency,
-    CardLast4: i.card_last4,
-    Status: i.status,
-    StatusReason: i.status_reason,
-    ProviderTxnID: i.provider_transaction_id,
-  }));
+  const mapped = instances.map((i) => instanceToExportRow(i));
 
   const ws = xlsx.utils.json_to_sheet(mapped);
   const wb = xlsx.utils.book_new();
   xlsx.utils.book_append_sheet(wb, ws, "Charge Instances");
-  const buffer = xlsx.write(wb, { type: "buffer", bookType: "csv" });
+  const buffer = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
 
   TraceLogger.info("CHARGE_INSTANCE_EXPORT", `Exported filtered instances`, {
     request_id: reqId,
     actor_user_id: userId,
   });
 
+  const dateStr = new Date().toISOString().slice(0, 10);
   res.setHeader(
     "Content-Disposition",
-    'attachment; filename="charge_instances_export.csv"',
+    `attachment; filename="qp_instances_export_${dateStr}.xlsx"`,
   );
-  res.setHeader("Content-Type", "text/csv");
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
   res.send(buffer);
 });
 
@@ -851,9 +941,11 @@ async function chargeInstance(instance, userId, runId = null) {
       responseBody?.transaction_id || responseBody?.id || null;
     instance.provider_code = responseBody?.code;
     instance.last_request_id = reqId;
+    instance.last_response_payload = responseBody;
   } catch (err) {
     instance.status = "ERROR";
     instance.status_reason = "System processing error: " + err.message;
+    instance.last_response_payload = { error_message: err.message };
   }
 
   instance.completed_at = new Date();
@@ -882,6 +974,12 @@ exports.processChargeInstance = catchAsync(async (req, res, next) => {
   }
 });
 
+// Random delay 5-15s between bulk charges (human-like)
+const delayBetweenCharges = () =>
+  new Promise((resolve) =>
+    setTimeout(resolve, 5000 + Math.random() * 10000),
+  );
+
 // MARK: 6a. Process Multiple Instances by ID list
 // 6a. Process Multiple Instances by ID list
 exports.processMultipleInstances = catchAsync(async (req, res, next) => {
@@ -895,7 +993,8 @@ exports.processMultipleInstances = catchAsync(async (req, res, next) => {
   }
 
   const results = [];
-  for (let id of ids) {
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
     try {
       const inst = await QPChargeInstance.findById(id);
       const done = await chargeInstance(inst, userId, run_id);
@@ -903,12 +1002,159 @@ exports.processMultipleInstances = catchAsync(async (req, res, next) => {
     } catch (e) {
       results.push({ id, error: e.message });
     }
+    if (i < ids.length - 1) {
+      await delayBetweenCharges();
+    }
   }
 
   res.status(200).json({
     status: "success",
     data: results,
   });
+});
+
+// MARK: 6b. Create and process single (manual entry)
+const MANUAL_FILE_NAME = "Manual entry";
+const MANUAL_STORAGE_PATH = "internal://manual";
+
+async function getOrCreateManualChargeFile(userId) {
+  let file = await QPChargeFile.findOne({
+    file_name: MANUAL_FILE_NAME,
+    deleted_at: null,
+  });
+  if (!file) {
+    file = await QPChargeFile.create({
+      file_name: MANUAL_FILE_NAME,
+      file_type: "XLSX",
+      storage_path: MANUAL_STORAGE_PATH,
+      status: "IMPORTED",
+      created_by: userId,
+    });
+  }
+  return file;
+}
+
+function parseExpiryFromBody(body) {
+  let month = body.expiry_month;
+  let year = body.expiry_year;
+  if ((month != null && year != null) || (body.expiry_month !== undefined || body.expiry_year !== undefined)) {
+    month = month != null ? parseInt(month, 10) : null;
+    year = year != null ? parseInt(year, 10) : null;
+    if (!isNaN(month) && month >= 1 && month <= 12) {
+      if (!isNaN(year) && year >= 0) {
+        const fullYear = year < 100 ? 2000 + year : year;
+        return { month, year: fullYear % 100 };
+      }
+    }
+  }
+  const cardExpire = body.card_expire || body.cardExpire;
+  if (!cardExpire) return { month: null, year: null };
+  const str = String(cardExpire).trim();
+  const parts = str.split(/[/-]/);
+  if (parts.length >= 2) {
+    const m = parseInt(parts[0], 10);
+    const y = parseInt(parts[1], 10);
+    if (!isNaN(m) && m >= 1 && m <= 12 && !isNaN(y)) {
+      return { month: m, year: y < 100 ? y : y % 100 };
+    }
+  }
+  return { month: null, year: null };
+}
+
+exports.createAndProcessSingle = catchAsync(async (req, res, next) => {
+  const userId = req.user?.userId;
+  const body = req.body || {};
+
+  const hotel_id = (body.hotel_id || body.hotelId || "").toString().trim();
+  const reservation_id = (body.reservation_id || body.reservationId || "").toString().trim();
+  const amount_numeric = parseFloat(body.amount_numeric ?? body.amount ?? 0);
+  const currency = (body.currency || "USD").toString().toUpperCase().slice(0, 3);
+  const card_number = (body.card_number || body.cardNumber || "").toString().trim().replace(/\s/g, "");
+  const cvv = (body.cvv || "").toString().trim();
+  const billing_address = body.billing_address || body.billingAddress || {};
+  const ota = (body.ota || "").toString().trim();
+  const vnp_work_id = (body.vnp_work_id || body.vnpWorkId || "").toString().trim();
+  const portfolio = (body.portfolio || "").toString().trim();
+  const user_id = (body.user_id || body.userId || "").toString().trim();
+
+  if (!hotel_id || !reservation_id || !amount_numeric || amount_numeric <= 0) {
+    return res.status(400).json({
+      status: "error",
+      message: "hotel_id, reservation_id, and positive amount_numeric are required",
+    });
+  }
+  if (!card_number || card_number.length < 13) {
+    return res.status(400).json({
+      status: "error",
+      message: "Valid card_number is required",
+    });
+  }
+  if (!cvv || !/^\d{3,4}$/.test(cvv)) {
+    return res.status(400).json({
+      status: "error",
+      message: "cvv must be 3 or 4 digits",
+    });
+  }
+
+  const manualFile = await getOrCreateManualChargeFile(userId);
+  const nextRow =
+    (await QPChargeInstance.countDocuments({
+      charge_file_id: manualFile._id,
+      deleted_at: null,
+    })) + 1;
+
+  const { month: expiry_month, year: expiry_year } = parseExpiryFromBody(body);
+  if (!expiry_month || expiry_year == null) {
+    return res.status(400).json({
+      status: "error",
+      message: "card_expire (MM/YY) or expiry_month and expiry_year are required",
+    });
+  }
+
+  const card_last4 = card_number.slice(-4);
+  const charge_key = crypto
+    .createHash("sha256")
+    .update(`${hotel_id}-${reservation_id}-${amount_numeric}-${card_last4}`)
+    .digest("hex");
+
+  const instance = new QPChargeInstance({
+    charge_file_id: manualFile._id,
+    parent_file_name: MANUAL_FILE_NAME,
+    row_number: nextRow,
+    hotel_id,
+    reservation_id,
+    amount_numeric,
+    currency,
+    user_id: user_id || undefined,
+    ota: ota || undefined,
+    vnp_work_id: vnp_work_id || undefined,
+    portfolio: portfolio || undefined,
+    billing_address: {
+      address_1: (billing_address.address_1 || "").toString().trim(),
+      address_2: (billing_address.address_2 || "").toString().trim(),
+      city: (billing_address.city || "").toString().trim(),
+      state: (billing_address.state || "").toString().trim(),
+      postal_code: (billing_address.postal_code || "").toString().trim(),
+      country_code: (billing_address.country_code || "US").toString().toUpperCase().slice(0, 2),
+    },
+    card_number: encrypt(card_number),
+    card_last4,
+    cvv: encrypt(cvv),
+    expiry_month,
+    expiry_year,
+    charge_key,
+    status: "PENDING",
+    created_by: userId,
+  });
+
+  await instance.save();
+
+  try {
+    const processed = await chargeInstance(instance, userId);
+    res.status(200).json({ status: "success", data: processed });
+  } catch (e) {
+    res.status(400).json({ status: "error", message: e.message });
+  }
 });
 
 // MARK: 7. Process Bulk Run for a Charge File
@@ -997,6 +1243,7 @@ async function processBulkRunAsync(file, runId, userId) {
         responseBody?.transaction_id || responseBody?.id || null;
       instance.provider_code = responseBody?.code;
       instance.last_request_id = reqId;
+      instance.last_response_payload = responseBody;
 
       if (providerResult === "SUCCESS") success++;
       else if (providerResult === "DECLINED") declined++;
@@ -1004,11 +1251,18 @@ async function processBulkRunAsync(file, runId, userId) {
     } catch (e) {
       instance.status = "ERROR";
       instance.status_reason = "Exception: " + e.message;
+      instance.last_response_payload = { error_message: e.message };
       errCount++;
     }
 
     instance.completed_at = new Date();
     await instance.save();
+
+    // Delay between charges (5-15s) for human-like spacing
+    const idx = instances.indexOf(instance);
+    if (idx >= 0 && idx < instances.length - 1) {
+      await delayBetweenCharges();
+    }
   }
 
   file.status = errCount > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
@@ -1136,6 +1390,53 @@ exports.downloadCompiledFile = catchAsync(async (req, res, next) => {
   res.setHeader(
     "Content-Disposition",
     `attachment; filename="compiled_${file.file_name}"`,
+  );
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
+  res.send(buffer);
+});
+
+// MARK: 8b. Download Report (parent file style with charge status column)
+exports.downloadReport = catchAsync(async (req, res, next) => {
+  const reqId = generateRequestId();
+  const userId = req.user?.userId;
+  const fileId = req.params.id;
+
+  const file = await QPChargeFile.findById(fileId);
+  if (!file || file.deleted_at) {
+    return res.status(404).json({ status: "error", message: "Not found" });
+  }
+
+  const instances = await QPChargeInstance.find({
+    charge_file_id: fileId,
+    deleted_at: null,
+  })
+    .sort({ row_number: 1 })
+    .lean();
+
+  const mapped = instances.map((i) => instanceToExportRow(i));
+
+  const ws = xlsx.utils.json_to_sheet(mapped);
+  const wb = xlsx.utils.book_new();
+  xlsx.utils.book_append_sheet(wb, ws, "Report");
+  const buffer = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+
+  TraceLogger.info(
+    "CHARGE_FILE_DOWNLOAD_REPORT",
+    `Downloaded report for file ${fileId}`,
+    {
+      request_id: reqId,
+      actor_user_id: userId,
+      entity_id: fileId,
+    },
+  );
+
+  const safeName = (file.file_name || "report").replace(/[^a-zA-Z0-9._-]/g, "_");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="qp_report_${safeName}"`,
   );
   res.setHeader(
     "Content-Type",
