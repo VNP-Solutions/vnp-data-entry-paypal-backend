@@ -6,6 +6,7 @@ const mongoose = require("mongoose");
 
 const QPChargeFile = require("../models/QPChargeFile");
 const QPChargeInstance = require("../models/QPChargeInstance");
+const User = require("../models/User");
 const { encrypt, decrypt } = require("../utils/encryption");
 const {
   TraceLogger,
@@ -56,23 +57,42 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     parent_file_name: fileName,
     row_number: rowNumber,
 
-    ota: getVal("OTA", "ota", "Ota"),
-    vnp_work_id: getVal("VNP Work ID", "vnp_work_id", "VNP_Work_ID", "Work ID"),
+    ota: getVal("OTA Name", "OTA", "ota", "Ota"),
+    vnp_work_id: getVal(
+      "VNP Work ID",
+      "VNP World ID",
+      "vnp_work_id",
+      "VNP_Work_ID",
+      "Work ID",
+    ),
     portfolio: getVal("Portfolio", "portfolio"),
 
-    hotel_id: getVal("Expedia ID", "Hotel ID", "Hotel_ID", "hotel_id"),
-    reservation_id: getVal("Reservation ID", "reservation_id", "Order ID"),
+    hotel_id: getVal("OTA ID", "Hotel ID", "Expedia ID", "Hotel_ID", "hotel_id"),
+    reservation_id: getVal(
+      "ReservationID",
+      "Reservation ID",
+      "reservation_id",
+      "Order ID",
+    ),
     amount_numeric:
       parseFloat(getVal("Amount to charge", "amount", "Amount")) || null,
     currency: getVal("Curency", "Currency", "currency") || "USD",
-    user_id: getVal("User ID", "user_id", "Name", "Name "), // Fallback mapping based on user specs
+    user_id: getVal(
+      "OTA Billing Name",
+      "Name",
+      "QP Username",
+      "Username",
+      "User ID",
+      "user_id",
+      "Name ",
+    ),
 
     billing_address: {
       address_1: getVal("Address 1", "address_1", "Address"),
       address_2: getVal("Address 2", "address_2"),
       city: getVal("City", "city"),
       state: getVal("State", "state"),
-      postal_code: getVal("Zip", "Postal Code", "zip", "postal_code"),
+      postal_code: getVal("Zip Code", "Zip", "Postal Code", "zip", "postal_code"),
       country_code: getVal("Country", "country", "Country Code") || "US",
     },
 
@@ -95,9 +115,9 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
   }
 
   let excelExpireDate = getVal(
+    "Expire",
     "Card Expire",
     "Card Expire MM/YY",
-    "Expire",
     "Exp",
   );
   const expire =
@@ -825,7 +845,7 @@ function instanceToExportRow(i) {
       ? `${String(i.expiry_month).padStart(2, "0")}/${String(i.expiry_year).slice(-2).padStart(2, "0")}`
       : "";
   return {
-    "Expedia ID": i.hotel_id,
+    "OTA ID": i.hotel_id,
     "Reservation ID": i.reservation_id,
     "Amount to charge": i.amount_numeric,
     Currency: i.currency,
@@ -833,14 +853,14 @@ function instanceToExportRow(i) {
     "Address 2": i.billing_address?.address_2,
     City: i.billing_address?.city,
     State: i.billing_address?.state,
-    Zip: i.billing_address?.postal_code,
+    "Zip Code": i.billing_address?.postal_code,
     Country: i.billing_address?.country_code,
     "Card Number": cardNumber,
     "Card Expire": cardExpire,
-    OTA: i.ota,
+    "OTA Name": i.ota,
     "VNP Work ID": i.vnp_work_id,
     Portfolio: i.portfolio,
-    "User ID": i.user_id,
+    "OTA Billing Name": i.user_id,
     "Charge Status": i.status,
     "Status Reason": i.status_reason,
     "Provider Txn ID": i.provider_transaction_id,
@@ -949,6 +969,9 @@ async function chargeInstance(instance, userId, runId = null) {
   }
 
   instance.completed_at = new Date();
+  // Set VNP Work ID to logged-in user's email after charge
+  const user = await User.findById(userId).select("email").lean();
+  instance.vnp_work_id = user?.email ?? "";
   await instance.save();
   return instance;
 }

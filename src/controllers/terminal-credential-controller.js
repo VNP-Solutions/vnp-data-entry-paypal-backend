@@ -66,7 +66,7 @@ exports.createCredential = catchAsync(async (req, res, next) => {
 // MARK: 2. List credentials
 // 2. List credentials
 exports.getCredentials = catchAsync(async (req, res, next) => {
-  const { hotel_id, q, include_deleted, include_key } = req.query;
+  const { hotel_id, q, include_deleted, include_key, page, limit } = req.query;
 
   let query = {};
 
@@ -83,13 +83,20 @@ exports.getCredentials = catchAsync(async (req, res, next) => {
     ];
   }
 
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+  const skip = (pageNum - 1) * limitNum;
+
+  const total = await TerminalCredential.countDocuments(query);
+
   // By default we omit the encrypted key entirely for security.  If the
   // client passes `include_key=true` we will fetch the documents with the
   // key and decrypt it before returning.
-  let credsQuery = TerminalCredential.find(query).populate(
-    "created_by updated_by",
-    "name email",
-  );
+  let credsQuery = TerminalCredential.find(query)
+    .populate("created_by updated_by", "name email")
+    .skip(skip)
+    .limit(limitNum)
+    .sort({ createdAt: -1 });
 
   if (include_key === "true") {
     // do not strip the field
@@ -107,7 +114,13 @@ exports.getCredentials = catchAsync(async (req, res, next) => {
     });
   }
 
-  res.status(200).json({ status: "success", data: credentials });
+  const pages = Math.ceil(total / limitNum) || 1;
+
+  res.status(200).json({
+    status: "success",
+    data: credentials,
+    pagination: { total, page: pageNum, limit: limitNum, pages },
+  });
 });
 
 // MARK: 3. Get Single
@@ -266,7 +279,7 @@ exports.importCredentials = catchAsync(async (req, res, next) => {
 exports.exportCredentials = catchAsync(async (req, res, next) => {
   const reqId = generateRequestId();
   const userId = req.user?.userId;
-  const { mask_terminal_key = "true", format = "xlsx" } = req.query;
+  const { mask_terminal_key = "true", format = "xlsx", ids } = req.query;
 
   if (!["xlsx", "csv"].includes(format.toLowerCase())) {
     return res.status(400).json({
@@ -275,7 +288,18 @@ exports.exportCredentials = catchAsync(async (req, res, next) => {
     });
   }
 
-  const credentials = await TerminalCredential.find({ deleted_at: null });
+  const query = { deleted_at: null };
+  if (ids) {
+    const idList = Array.isArray(ids)
+      ? ids
+      : String(ids)
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+    if (idList.length) query._id = { $in: idList };
+  }
+
+  const credentials = await TerminalCredential.find(query);
 
   const mapped = credentials.map((c) => {
     let tk =

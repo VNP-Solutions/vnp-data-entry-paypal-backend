@@ -165,6 +165,11 @@ app.post("/api/auth/verify-otp", authController.verifyOTP);
 app.post("/api/auth/resend-otp", authController.resendOTP);
 app.post("/api/auth/forgot-password", authController.forgotPassword);
 app.post("/api/auth/reset-password/:token", authController.resetPassword);
+app.post(
+  "/api/auth/verify-password",
+  authenticateToken,
+  authController.verifyPassword,
+);
 
 // Invitation Routes
 app.post(

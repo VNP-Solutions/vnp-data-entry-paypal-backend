@@ -1083,6 +1083,61 @@ const completeInvitation = async (req, res) => {
     }
 };
 
+// Verify password (re-auth for sensitive actions)
+const verifyPassword = async (req, res) => {
+    try {
+        if (!req.user || !req.user.userId) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'Authentication required'
+            });
+        }
+        const { password } = req.body;
+        if (!password || typeof password !== 'string') {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Password is required'
+            });
+        }
+        const user = await User.findById(req.user.userId).select('password');
+        if (!user) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'User not found'
+            });
+        }
+        if (!user.password) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'Invalid password'
+            });
+        }
+        let isValid = false;
+        try {
+            isValid = await user.comparePassword(password);
+        } catch (compareErr) {
+            console.error('Verify password compare error:', compareErr);
+            return res.status(401).json({
+                status: 'error',
+                message: 'Invalid password'
+            });
+        }
+        if (!isValid) {
+            return res.status(401).json({
+                status: 'error',
+                message: 'Invalid password'
+            });
+        }
+        res.status(200).json({ status: 'success' });
+    } catch (error) {
+        console.error('Verify password error:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Internal server error'
+        });
+    }
+};
+
 module.exports = {
     register,
     login,
@@ -1093,5 +1148,6 @@ module.exports = {
     verifyOTP,
     resendOTP,
     validateInvitation,
-    completeInvitation
+    completeInvitation,
+    verifyPassword
 }; 
