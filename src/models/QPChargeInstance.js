@@ -22,6 +22,7 @@ const qpChargeInstanceSchema = new mongoose.Schema({
   
   // Payment Identity
   hotel_id: { type: String, index: true },
+  hotel_name: { type: String },
   reservation_id: { type: String, index: true },
   amount_numeric: { type: Number },
   currency: { type: String, default: 'USD' },

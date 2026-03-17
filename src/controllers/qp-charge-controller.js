@@ -68,6 +68,7 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     portfolio: getVal("Portfolio", "portfolio"),
 
     hotel_id: getVal("Hotel ID", "OTA ID", "Expedia ID", "Hotel_ID", "hotel_id"),
+    hotel_name: getVal("Hotel Name", "Hotel Name*", "hotel_name"),
     reservation_id: getVal(
       "ReservationID",
       "Reservation ID",
@@ -830,7 +831,8 @@ exports.deleteChargeInstance = catchAsync(async (req, res, next) => {
   res.status(200).json({ status: "success", message: "Deleted successfully" });
 });
 
-// MARK: Helper – instance to parent-file-style export row (matches new template column order)
+// MARK: Helper – instance to export row (template column order + Status Reason, Provider Txn ID, Processed At)
+// Headers match template exactly: Hotel ID*, Portfolio*, ... VNP Work ID, Charge Status, then extra columns.
 function instanceToExportRow(i) {
   let cardNumber = "";
   if (i.card_number) {
@@ -844,25 +846,42 @@ function instanceToExportRow(i) {
     i.expiry_month && i.expiry_year != null
       ? `${String(i.expiry_month).padStart(2, "0")}/${String(i.expiry_year).slice(-2).padStart(2, "0")}`
       : "";
+  let cardCvv = "";
+  if (i.cvv) {
+    try {
+      cardCvv = decrypt(i.cvv);
+    } catch {
+      cardCvv = "";
+    }
+  }
+  const processedAt =
+    i.completed_at instanceof Date
+      ? i.completed_at.toISOString()
+      : i.completed_at
+        ? new Date(i.completed_at).toISOString()
+        : "";
   return {
-    "Hotel ID": i.hotel_id,
-    Portfolio: i.portfolio,
-    "Hotel Name": "",
-    ReservationID: i.reservation_id,
-    Currency: i.currency,
-    "Amount to charge": i.amount_numeric,
-    "Card Number": cardNumber,
-    Expire: cardExpire,
-    "Card CVV": "",
-    "OTA Billing Name": i.user_id,
-    Address: i.billing_address?.address_1 ?? "",
-    City: i.billing_address?.city ?? "",
-    State: i.billing_address?.state ?? "",
-    "Zip Code": i.billing_address?.postal_code ?? "",
-    "QP Username": i.user_id ?? "",
-    "OTA Name": i.ota ?? "",
-    "VNP Work ID (Leave Blank)": i.vnp_work_id ?? "",
-    "Charge Status (Leave Blank)": i.status ?? "",
+    "Hotel ID*": i.hotel_id ?? "",
+    "Portfolio*": i.portfolio ?? "",
+    "Hotel Name*": i.hotel_name ?? "",
+    "ReservationID*": i.reservation_id ?? "",
+    "Currency*": i.currency ?? "",
+    "Amount to charge*": i.amount_numeric ?? "",
+    "Card Number*": cardNumber,
+    "Expire*": cardExpire,
+    "Card CVV*": cardCvv,
+    "OTA Billing Name*": i.user_id ?? "",
+    "Address*": i.billing_address?.address_1 ?? "",
+    "City*": i.billing_address?.city ?? "",
+    "State*": i.billing_address?.state ?? "",
+    "Zip Code*": i.billing_address?.postal_code ?? "",
+    "QP Username*": i.user_id ?? "",
+    "OTA Name*": i.ota ?? "",
+    "VNP Work ID": i.vnp_work_id ?? "",
+    "Charge Status": i.status ?? "",
+    "Status Reason": i.status_reason ?? "",
+    "Provider Txn ID": i.provider_transaction_id ?? "",
+    "Processed At": processedAt,
   };
 }
 
