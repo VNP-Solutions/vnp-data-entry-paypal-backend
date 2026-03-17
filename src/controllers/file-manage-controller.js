@@ -1305,11 +1305,22 @@ const getUploadStatus = async (req, res) => {
 const getUserUploadSessions = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { status, limit = 20, page = 1, search } = req.query;
+    const { status, limit = 20, page = 1, search, gateway } = req.query;
 
     const query = {}; // Show sessions from all users
     if (status) {
       query.status = status;
+    }
+
+    // Filter by payment gateway (e.g. main branch: paypal,stripe; qpvt branch: qp)
+    if (gateway && typeof gateway === "string") {
+      const gateways = gateway
+        .split(",")
+        .map((g) => g.trim().toLowerCase())
+        .filter(Boolean);
+      if (gateways.length) {
+        query.paymentGateway = { $in: gateways };
+      }
     }
 
     if (search && search.trim() !== "") {
