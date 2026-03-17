@@ -1436,10 +1436,12 @@ const getUserUploadSessions = async (req, res) => {
       sessions.map(async (session) => {
         const paymentGateway = session.paymentGateway || "paypal";
         if (paymentGateway === "qp" && session.linkedQpChargeFileId) {
-          const qpFile = await QPChargeFile.findById(
-            session.linkedQpChargeFileId,
-          ).lean();
-          return qpFile ? qpFile.success_count || 0 : 0;
+          // Count from instances so it's correct for both bulk runs and single-instance charges
+          return await QPChargeInstance.countDocuments({
+            charge_file_id: session.linkedQpChargeFileId,
+            status: { $in: ["SUCCESS", "DECLINED"] },
+            deleted_at: null,
+          });
         }
         const DataModel =
           paymentGateway === "stripe" ? StripeExcelData : ExcelData;
