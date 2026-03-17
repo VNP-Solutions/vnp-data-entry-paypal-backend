@@ -1,3 +1,18 @@
+/**
+ * file-manage-controller.js
+ * Handles file uploads, upload sessions, and File History for PayPal, Stripe, and QP gateways.
+ * Supports unified upload (S3 + processing), retry, delete, archive, and report download.
+ *
+ * BOOKMARK LIST (landmarks in this file – search for "// MARK:")
+ * ------------------------------------
+ * Get all upload sessions (File History)
+ *   List upload sessions with pagination/search. Optional gateway filter (e.g. paypal,stripe or qp).
+ * Charge count per session
+ *   QP: count of QPChargeInstance with status SUCCESS or DECLINED for linked file; PayPal/Stripe: count ExcelData/StripeExcelData with "Charge status" Charged.
+ * QP session display (total/processed)
+ *   For QP sessions, totalRows and processedRows come from linked QPChargeFile; others use session fields.
+ */
+
 const mongoose = require("mongoose");
 const XLSX = require("xlsx");
 const path = require("path");
@@ -1408,15 +1423,27 @@ const getUploadStatus = async (req, res) => {
   }
 };
 
-// Get all upload sessions from all users
+// MARK: Get all upload sessions (File History)
+// List with optional gateway filter (main: paypal,stripe; qpvt: qp), pagination, search.
 const getUserUploadSessions = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { status, limit = 20, page = 1, search } = req.query;
+    const { status, limit = 20, page = 1, search, gateway } = req.query;
 
     const query = {}; // Show sessions from all users
     if (status) {
       query.status = status;
+    }
+
+    // Filter by payment gateway (e.g. main branch: paypal,stripe; qpvt branch: qp)
+    if (gateway && typeof gateway === "string") {
+      const gateways = gateway
+        .split(",")
+        .map((g) => g.trim().toLowerCase())
+        .filter(Boolean);
+      if (gateways.length) {
+        query.paymentGateway = { $in: gateways };
+      }
     }
 
     if (search && search.trim() !== "") {
@@ -1431,7 +1458,7 @@ const getUserUploadSessions = async (req, res) => {
 
     const total = await UploadSession.countDocuments(query);
 
-    // Add chargedCount and QP progress for each session
+    // MARK: Charge count per session – QP: SUCCESS+DECLINED instances; PayPal/Stripe: Charged count
     const chargedCounts = await Promise.all(
       sessions.map(async (session) => {
         const paymentGateway = session.paymentGateway || "paypal";
@@ -1452,7 +1479,7 @@ const getUserUploadSessions = async (req, res) => {
       }),
     );
 
-    // For QP sessions, use linked file's total/processed for display
+    // MARK: QP session display – totalRows/processedRows from linked QPChargeFile
     const sessionsWithQP = await Promise.all(
       sessions.map(async (session, idx) => {
         const paymentGateway = session.paymentGateway || "paypal";

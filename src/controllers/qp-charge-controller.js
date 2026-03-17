@@ -1,3 +1,40 @@
+/**
+ * qp-charge-controller.js
+ * QP (Quantum Pay) charge file and instance lifecycle: import XLSX/CSV, CRUD charge files/instances,
+ * single/bulk charge processing, export/report download. Export matches template column order + Status Reason, Provider Txn ID, Processed At.
+ *
+ * BOOKMARK LIST (landmarks in this file – search for "// MARK:")
+ * ------------------------------------
+ * Map Row to Instance
+ *   mapRowToInstance: maps template row to QPChargeInstance (hotel_id, hotel_name, reservation_id, amount, card, billing, status). Handles Hotel Name, flexible column names.
+ * Import Charging Sheet (shared logic from path)
+ *   importChargeFileFromPath: reads workbook, creates QPChargeFile, inserts QPChargeInstance per row.
+ * Import Charging Sheet (HTTP handler)
+ *   API handler that accepts multipart file and calls importChargeFileFromPath.
+ * Get Charge Files / Get Single Charge File
+ *   List and fetch QPChargeFile with optional filters.
+ * Get Charge Instances with filters, search, pagination, and aggregate stats
+ *   Paginated instances for a file with status aggregates.
+ * Delete Charge File (Soft) / Update Charge File / Get Charge File Progress
+ *   Soft delete, patch metadata, progress (success_count, declined_count, etc.).
+ * Export Raw Pre-processing Instances
+ *   Export instances before charging (template-style).
+ * Get Single Charge Instance / Update Charge Instance / Delete Charge Instance
+ *   CRUD for one instance with validation.
+ * Helper – instance to export row (template column order + Status Reason, Provider Txn ID, Processed At)
+ *   instanceToExportRow: template headers (Hotel ID*, Portfolio*, Hotel Name*, ... Charge Status) then Status Reason, Provider Txn ID, Processed At. Decrypts card/CVV.
+ * Export Filtered Charge Instances
+ *   XLSX download of instances (filter by file, status, ids) using instanceToExportRow.
+ * Process Single Instance / Process Multiple by ID list / Create and process single (manual entry)
+ *   chargeInstance helper; API handlers for one or many charges.
+ * Process Bulk Run for a Charge File
+ *   processBulkRunAsync: run all PENDING instances for a file, update file success_count/declined_count.
+ * Download Compiled Excel
+ *   Download compiled results (RowNumber, HotelID, Status, etc.) for a charge file.
+ * Download Report (parent file style with charge status column)
+ *   Report using instanceToExportRow (template order + extras) for a charge file.
+ */
+
 const crypto = require("crypto");
 const xlsx = require("xlsx");
 const path = require("path");

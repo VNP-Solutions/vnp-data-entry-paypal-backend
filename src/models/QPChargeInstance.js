@@ -1,3 +1,31 @@
+/**
+ * QPChargeInstance.js
+ * Schema for a single charge row (one reservation/card) within a QP charge file.
+ * Stores payment identity (hotel_id, hotel_name, reservation_id), amount, currency, billing address,
+ * encrypted card data, status (PENDING/SUCCESS/DECLINED/ERROR/etc.), and provider response fields.
+ *
+ * BOOKMARK LIST (landmarks in this file – schema sections)
+ * ------------------------------------
+ * charge_file_id, parent_file_name, row_number
+ *   Links instance to QPChargeFile and row index.
+ * Carry-through fields (From XLSX)
+ *   ota, vnp_work_id, portfolio from template.
+ * Payment Identity
+ *   hotel_id, hotel_name, reservation_id, amount_numeric, currency, user_id.
+ * Billing Address
+ *   address_1, address_2, city, state, postal_code, country_code.
+ * Card Details (Masked and Encrypted)
+ *   card_number, card_last4, expiry_month, expiry_year, cvv.
+ * Status
+ *   status (enum), status_reason.
+ * Idempotency / duplicates
+ *   charge_key, is_duplicate.
+ * Provider summary
+ *   provider_transaction_id, provider_message, provider_code.
+ * Trace fields
+ *   last_request_id, last_run_id, requested_at, completed_at, last_response_payload.
+ */
+
 const mongoose = require('mongoose');
 
 const qpChargeInstanceSchema = new mongoose.Schema({
