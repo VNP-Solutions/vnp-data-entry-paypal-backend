@@ -1068,7 +1068,9 @@ const processPayment = async (req, res) => {
                         paypalCreateTime: paymentDetails.createTime,
                         paypalUpdateTime: paymentDetails.updateTime,
                         paypalCustomId: paymentDetails.customId,
-                        lastFailureDate: new Date().toISOString()
+                        lastFailureDate: new Date().toISOString(),
+                        lastChargeApiResponse: jsonResponse ? JSON.parse(JSON.stringify(jsonResponse)) : null,
+                        lastChargeApiResponseAt: new Date()
                     },
                     { new: true }
                 );
@@ -1189,7 +1191,9 @@ const processPayment = async (req, res) => {
                     paypalCaptureStatus: paymentDetails.captureStatus,
                     paypalCustomId: paymentDetails.customId,
                     ota: otaName, // Preserve original OTA name from record
-                    otaId: otaId
+                    otaId: otaId,
+                    lastChargeApiResponse: jsonResponse ? JSON.parse(JSON.stringify(jsonResponse)) : null,
+                    lastChargeApiResponseAt: new Date()
                 },
                 { new: true }
             );
@@ -1501,7 +1505,9 @@ const processBulkPayments = async (req, res) => {
                                 paypalCreateTime: paymentDetails.createTime,
                                 paypalUpdateTime: paymentDetails.updateTime,
                                 paypalCustomId: paymentDetails.customId,
-                                lastFailureDate: new Date().toISOString()
+                                lastFailureDate: new Date().toISOString(),
+                                lastChargeApiResponse: jsonResponse ? JSON.parse(JSON.stringify(jsonResponse)) : null,
+                                lastChargeApiResponseAt: new Date()
                             },
                             { new: true }
                         );
@@ -1554,7 +1560,9 @@ const processBulkPayments = async (req, res) => {
                                 paypalUpdateTime: paymentDetails.updateTime,
                                 paypalCustomId: paymentDetails.customId,
                                 paypalErrorReason: `Payment status is ${captureStatus}. Expected COMPLETED.`,
-                                lastFailureDate: new Date().toISOString()
+                                lastFailureDate: new Date().toISOString(),
+                                lastChargeApiResponse: jsonResponse ? JSON.parse(JSON.stringify(jsonResponse)) : null,
+                                lastChargeApiResponseAt: new Date()
                             },
                             { new: true }
                         );
@@ -1629,7 +1637,9 @@ const processBulkPayments = async (req, res) => {
                             paypalCaptureStatus: paymentDetails.captureStatus,
                             paypalCustomId: paymentDetails.customId,
                             ota: otaName, // Preserve original OTA name from record
-                            otaId: otaId
+                            otaId: otaId,
+                            lastChargeApiResponse: jsonResponse ? JSON.parse(JSON.stringify(jsonResponse)) : null,
+                            lastChargeApiResponseAt: new Date()
                         },
                         { new: true }
                     );
@@ -1689,7 +1699,9 @@ const processBulkPayments = async (req, res) => {
                             'Status': 'Payment Failed',
                             paypalErrorReason: errorMessage,
                             paypalErrorType: errorType,
-                            lastFailureDate: new Date().toISOString()
+                            lastFailureDate: new Date().toISOString(),
+                            lastChargeApiResponse: { _recorded: 'exception', message: errorMessage, error_type: errorType },
+                            lastChargeApiResponseAt: new Date()
                         },
                         { new: true }
                     );

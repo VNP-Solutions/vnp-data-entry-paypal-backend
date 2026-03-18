@@ -927,6 +927,12 @@ const processStripePayment = async (req, res) => {
           recordStatus = `Payment ${paymentIntent.status}`;
         }
 
+        // Serialize PaymentIntent for details modal (Stripe objects may have toJSON)
+        const apiResponseSnapshot =
+          typeof paymentIntent.toJSON === "function"
+            ? paymentIntent.toJSON()
+            : JSON.parse(JSON.stringify(paymentIntent));
+
         // Update the StripeExcelData record with payment status and details
         const updatedRecord = await StripeExcelData.findByIdAndUpdate(
           documentId,
@@ -956,6 +962,8 @@ const processStripePayment = async (req, res) => {
             ...(paymentIntent.status !== "succeeded" && {
               lastFailureDate: new Date().toISOString(),
             }),
+            lastChargeApiResponse: apiResponseSnapshot,
+            lastChargeApiResponseAt: new Date(),
           },
           { new: true }
         );

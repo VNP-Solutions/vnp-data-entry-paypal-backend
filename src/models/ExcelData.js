@@ -227,6 +227,15 @@ const excelDataSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    // Last payment (charge) API response - stored for details modal (success/decline/failure)
+    lastChargeApiResponse: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    lastChargeApiResponseAt: {
+        type: Date,
+        default: null
+    },
     otaId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'OTA',
