@@ -8,43 +8,43 @@ const catchAsync = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
 
-// MARK: 1. Create single credential
-// 1. Create single credential
+// MARK: 1. Create single credential (username + terminal_key required; hotel_id optional)
 exports.createCredential = catchAsync(async (req, res, next) => {
   const reqId = generateRequestId();
   const { hotel_id, username, terminal_key } = req.body;
   const userId = req.user?.userId;
 
-  if (!hotel_id || !username || !terminal_key) {
+  const usernameTrim = username != null ? String(username).trim() : "";
+  const terminalKeyTrim = terminal_key != null ? String(terminal_key).trim() : "";
+  if (!usernameTrim || !terminalKeyTrim) {
     return res
       .status(400)
-      .json({ status: "error", message: "Missing required fields" });
+      .json({ status: "error", message: "Username and terminal key are required" });
   }
 
-  // Check if exists
   const existing = await TerminalCredential.findOne({
-    hotel_id,
+    username: usernameTrim,
     deleted_at: null,
   });
   if (existing) {
     return res.status(409).json({
       status: "error",
-      message: "Credential for this hotel ID already exists",
+      message: "Credential for this username already exists",
     });
   }
 
-  const encryptedKey = encrypt(terminal_key);
+  const encryptedKey = encrypt(terminalKeyTrim);
 
   const credential = await TerminalCredential.create({
-    hotel_id,
-    username,
+    hotel_id: hotel_id != null && String(hotel_id).trim() ? String(hotel_id).trim() : null,
+    username: usernameTrim,
     terminal_key: encryptedKey,
     created_by: userId,
   });
 
   TraceLogger.info(
     "TERMINAL_CRED_CREATE",
-    `Created terminal credential for hotel ${hotel_id}`,
+    `Created terminal credential for username ${usernameTrim}`,
     {
       request_id: reqId,
       actor_user_id: userId,
@@ -59,6 +59,25 @@ exports.createCredential = catchAsync(async (req, res, next) => {
       id: credential._id,
       hotel_id: credential.hotel_id,
       username: credential.username,
+    },
+  });
+});
+
+// MARK: 2a. Check unique usernames (read-only, non-destructive)
+exports.checkUniqueUsernames = catchAsync(async (req, res) => {
+  const duplicates = await TerminalCredential.aggregate([
+    { $match: { deleted_at: null } },
+    { $group: { _id: "$username", count: { $sum: 1 } } },
+    { $match: { count: { $gt: 1 } } },
+    { $project: { username: "$_id", count: 1, _id: 0 } },
+  ]);
+  const duplicateUsernames = duplicates.map((d) => d.username).filter(Boolean);
+  res.status(200).json({
+    status: "success",
+    data: {
+      allUnique: duplicateUsernames.length === 0,
+      duplicateUsernames,
+      duplicateCount: duplicateUsernames.length,
     },
   });
 });
@@ -233,29 +252,41 @@ exports.importCredentials = catchAsync(async (req, res, next) => {
   let skipped = 0;
 
   for (let row of rows) {
-    // Expected headers roughly: hotel_id, username, terminal_key
+    // Username and terminal_key required; hotel_id optional
     const hotel_id = row["hotel_id"] || row["Hotel ID"] || row["Hotel_ID"];
     const username = row["username"] || row["Username"];
     const terminal_key =
       row["terminal_key"] || row["Terminal Key"] || row["Terminal_Key"];
 
-    if (!hotel_id || !username || !terminal_key) {
+    const usernameStr = username != null ? String(username).trim() : "";
+    const terminalKeyStr = terminal_key != null ? String(terminal_key).trim() : "";
+    if (!usernameStr || !terminalKeyStr) {
       skipped++;
       continue;
     }
 
-    const encryptedKey = encrypt(terminal_key.toString());
+    const encryptedKey = encrypt(terminalKeyStr);
+    const hotelIdVal =
+      hotel_id != null && String(hotel_id).trim()
+        ? String(hotel_id).trim()
+        : null;
 
-    await TerminalCredential.findOneAndUpdate(
-      { hotel_id: hotel_id.toString() },
-      {
-        username: username.toString(),
+    const existing = await TerminalCredential.findOne({ username: usernameStr });
+    if (existing) {
+      existing.terminal_key = encryptedKey;
+      existing.updated_by = userId;
+      existing.hotel_id = hotelIdVal;
+      existing.deleted_at = null;
+      existing.deleted_by = undefined;
+      await existing.save();
+    } else {
+      await TerminalCredential.create({
+        username: usernameStr,
         terminal_key: encryptedKey,
-        updated_by: userId,
-        deleted_at: null, // restore if it was deleted
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
-    );
+        hotel_id: hotelIdVal,
+        created_by: userId,
+      });
+    }
     successes++;
   }
 

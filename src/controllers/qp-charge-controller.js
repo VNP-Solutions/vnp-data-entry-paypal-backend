@@ -43,6 +43,7 @@ const mongoose = require("mongoose");
 
 const QPChargeFile = require("../models/QPChargeFile");
 const QPChargeInstance = require("../models/QPChargeInstance");
+const UploadSession = require("../models/UploadSession");
 const User = require("../models/User");
 const { encrypt, decrypt } = require("../utils/encryption");
 const {
@@ -232,11 +233,12 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     instance.cvv = encrypt(cvv);
   }
 
-  // Idempotency key
+  // Idempotency key (uses QP username for lookup; same user + reservation + amount + card = same charge)
+  const keyUser = (instance.user_id || instance.hotel_id || "").toString().trim();
   instance.charge_key = crypto
     .createHash("sha256")
     .update(
-      `${instance.hotel_id}-${instance.reservation_id}-${instance.amount_numeric}-${instance.card_last4}`,
+      `${keyUser}-${instance.reservation_id}-${instance.amount_numeric}-${instance.card_last4}`,
     )
     .digest("hex");
 
@@ -263,16 +265,16 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     }
   }
 
-  // Basic Validation
+  // Basic Validation (QP username required for terminal key lookup)
   if (
-    !instance.hotel_id ||
+    !instance.user_id ||
     !instance.reservation_id ||
     !instance.amount_numeric ||
     !fullPan
   ) {
     instance.status = "INVALID";
     instance.status_reason =
-      "Missing required field (hotel, reservation, amount, or card).";
+      "Missing required field (QP username, reservation, amount, or card).";
   }
 
   return instance;
@@ -415,10 +417,21 @@ exports.importChargeFile = catchAsync(async (req, res, next) => {
 exports.importChargeFileFromPath = importChargeFileFromPath;
 
 // MARK: 2. Get Charge Files
-// 2. Get Charge Files with filters
+// 2. Get Charge Files with filters (excludes files from archived upload sessions)
 exports.getChargeFiles = catchAsync(async (req, res, next) => {
   const { status, created_by, date_from, date_to } = req.query;
   const match = { deleted_at: null };
+
+  const archivedSessions = await UploadSession.find(
+    { paymentGateway: "qp", archive: true, linkedQpChargeFileId: { $ne: null } },
+    { linkedQpChargeFileId: 1 },
+  ).lean();
+  const archivedChargeFileIds = archivedSessions
+    .map((s) => s.linkedQpChargeFileId)
+    .filter(Boolean);
+  if (archivedChargeFileIds.length) {
+    match._id = { $nin: archivedChargeFileIds };
+  }
 
   if (status) match.status = status;
   if (created_by) match.created_by = mongoose.Types.ObjectId(created_by);
@@ -471,9 +484,30 @@ exports.getChargeInstances = catchAsync(async (req, res, next) => {
   } = req.query;
 
   const match = { deleted_at: null };
+
+  // Exclude charge instances from archived files (File History archive = true)
+  const archivedSessions = await UploadSession.find(
+    { paymentGateway: "qp", archive: true, linkedQpChargeFileId: { $ne: null } },
+    { linkedQpChargeFileId: 1 },
+  ).lean();
+  const archivedChargeFileIds = archivedSessions
+    .map((s) => s.linkedQpChargeFileId)
+    .filter(Boolean);
+
   const fileId = charge_file_id || chargeFileId;
-  if (fileId) match.charge_file_id = fileId;
-  if (hotel_id) match.hotel_id = hotel_id;
+  if (fileId) {
+    match.charge_file_id = fileId;
+    if (archivedChargeFileIds.length) {
+      // Exclude instances from this file if the file is archived
+      match.$and = [
+        { charge_file_id: fileId },
+        { charge_file_id: { $nin: archivedChargeFileIds } },
+      ];
+      delete match.charge_file_id;
+    }
+  } else if (archivedChargeFileIds.length) {
+    match.charge_file_id = { $nin: archivedChargeFileIds };
+  }
   if (reservation_id) match.reservation_id = reservation_id;
   // Normalize status to uppercase to match schema enum (e.g. DECLINED, PENDING)
   if (status) match.status = String(status).toUpperCase();
@@ -979,14 +1013,17 @@ async function chargeInstance(instance, userId, runId = null) {
     throw new Error("Cannot process instance in current status");
   }
 
-  // Lookup terminal credentials
+  // Lookup terminal credentials by QP username (same as Terminal Keys page)
+  const qpUsername = (instance.user_id || "").toString().trim();
   const creds = await TerminalCredential.findOne({
-    hotel_id: instance.hotel_id,
+    username: qpUsername,
     deleted_at: null,
   });
   if (!creds) {
     instance.status = "ERROR";
-    instance.status_reason = "Missing Terminal Credentials for Hotel ID";
+    instance.status_reason = qpUsername
+      ? `Missing Terminal Credentials for QP Username: ${qpUsername}`
+      : "Missing QP Username (required for terminal key lookup)";
     await instance.save();
     throw new Error(instance.status_reason);
   }
@@ -1150,12 +1187,12 @@ exports.createAndProcessSingle = catchAsync(async (req, res, next) => {
   const ota = (body.ota || "").toString().trim();
   const vnp_work_id = (body.vnp_work_id || body.vnpWorkId || "").toString().trim();
   const portfolio = (body.portfolio || "").toString().trim();
-  const user_id = (body.user_id || body.userId || "").toString().trim();
+  const user_id = (body.user_id || body.userId || body.qp_username || "").toString().trim();
 
-  if (!hotel_id || !reservation_id || !amount_numeric || amount_numeric <= 0) {
+  if (!user_id || !reservation_id || !amount_numeric || amount_numeric <= 0) {
     return res.status(400).json({
       status: "error",
-      message: "hotel_id, reservation_id, and positive amount_numeric are required",
+      message: "user_id (QP username), reservation_id, and positive amount_numeric are required",
     });
   }
   if (!card_number || card_number.length < 13) {
@@ -1189,18 +1226,18 @@ exports.createAndProcessSingle = catchAsync(async (req, res, next) => {
   const card_last4 = card_number.slice(-4);
   const charge_key = crypto
     .createHash("sha256")
-    .update(`${hotel_id}-${reservation_id}-${amount_numeric}-${card_last4}`)
+    .update(`${user_id}-${reservation_id}-${amount_numeric}-${card_last4}`)
     .digest("hex");
 
   const instance = new QPChargeInstance({
     charge_file_id: manualFile._id,
     parent_file_name: MANUAL_FILE_NAME,
     row_number: nextRow,
-    hotel_id,
+    hotel_id: hotel_id || undefined,
     reservation_id,
     amount_numeric,
     currency,
-    user_id: user_id || undefined,
+    user_id,
     ota: ota || undefined,
     vnp_work_id: vnp_work_id || undefined,
     portfolio: portfolio || undefined,
@@ -1287,14 +1324,17 @@ async function processBulkRunAsync(file, runId, userId) {
     instance.requested_at = new Date();
     await instance.save();
 
+    const qpUsername = (instance.user_id || "").toString().trim();
     const creds = await TerminalCredential.findOne({
-      hotel_id: instance.hotel_id,
+      username: qpUsername,
       deleted_at: null,
     });
 
     if (!creds) {
       instance.status = "ERROR";
-      instance.status_reason = "Missing Terminal Credentials";
+      instance.status_reason = qpUsername
+        ? `Missing Terminal Credentials for QP Username: ${qpUsername}`
+        : "Missing QP Username (required for terminal key lookup)";
       instance.completed_at = new Date();
       await instance.save();
       errCount++;

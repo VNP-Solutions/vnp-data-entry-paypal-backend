@@ -437,6 +437,11 @@ app.get(
   terminalCredentialController.exportCredentials,
 );
 app.get(
+  "/api/terminal-credentials/check-unique-usernames",
+  authenticateToken,
+  terminalCredentialController.checkUniqueUsernames,
+);
+app.get(
   "/api/terminal-credentials/:id",
   authenticateToken,
   terminalCredentialController.getCredentialById,

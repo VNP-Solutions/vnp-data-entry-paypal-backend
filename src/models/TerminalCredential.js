@@ -3,12 +3,13 @@ const mongoose = require('mongoose');
 const terminalCredentialSchema = new mongoose.Schema({
   hotel_id: {
     type: String,
-    required: true,
-    unique: true
+    required: false,
+    default: null
   },
   username: {
     type: String,
-    required: true
+    required: true,
+    unique: true
   },
   terminal_key: {
     type: String,
@@ -36,5 +37,7 @@ const terminalCredentialSchema = new mongoose.Schema({
 
 // For soft deletion and fast constraint checking
 terminalCredentialSchema.index({ hotel_id: 1, deleted_at: 1 });
+// For charge lookup by QP username
+terminalCredentialSchema.index({ username: 1, deleted_at: 1 });
 
 module.exports = mongoose.model('TerminalCredential', terminalCredentialSchema);
