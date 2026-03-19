@@ -46,6 +46,7 @@ const QPChargeInstance = require("../models/QPChargeInstance");
 const UploadSession = require("../models/UploadSession");
 const User = require("../models/User");
 const { encrypt, decrypt } = require("../utils/encryption");
+const { sendMail } = require("../utils/email");
 const {
   TraceLogger,
   generateRequestId,
@@ -138,8 +139,9 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     status: "PENDING",
   });
 
-  // Handle Card
-  const fullPan = getVal("Card Number", "card_number", "PAN");
+  // Handle Card – sanitise spaces/dashes etc. (e.g. "5567 1723 5602 3540" -> digits only)
+  const rawPan = getVal("Card Number", "card_number", "PAN");
+  const fullPan = rawPan ? String(rawPan).replace(/\D/g, "") : "";
   if (fullPan) {
     instance.card_number = encrypt(fullPan);
     instance.card_last4 = fullPan.slice(-4);
@@ -535,13 +537,16 @@ exports.getChargeInstances = catchAsync(async (req, res, next) => {
   const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 20));
 
-  // Stats aggregation (same filter, no pagination)
+  // Total count from same match as find() so pagination is always correct
+  const totalCount = await QPChargeInstance.countDocuments(match);
+  const totalPages = Math.max(1, Math.ceil(totalCount / limitNum));
+
+  // Stats aggregation for amount and uniqueHotels only (totalCount from countDocuments above)
   const statsAgg = await QPChargeInstance.aggregate([
     { $match: match },
     {
       $group: {
         _id: null,
-        totalCount: { $sum: 1 },
         totalAmount: { $sum: { $ifNull: ["$amount_numeric", 0] } },
         hotelIds: { $addToSet: "$hotel_id" },
       },
@@ -549,7 +554,6 @@ exports.getChargeInstances = catchAsync(async (req, res, next) => {
     {
       $project: {
         _id: 0,
-        totalCount: 1,
         totalAmount: 1,
         uniqueHotels: { $size: "$hotelIds" },
       },
@@ -557,12 +561,9 @@ exports.getChargeInstances = catchAsync(async (req, res, next) => {
   ]);
 
   const stats = statsAgg[0] || {
-    totalCount: 0,
     totalAmount: 0,
     uniqueHotels: 0,
   };
-  const totalCount = stats.totalCount;
-  const totalPages = Math.max(1, Math.ceil(totalCount / limitNum));
 
   // Paginated rows with find (consistent with same match)
   const rows = await QPChargeInstance.find(match)
@@ -1024,6 +1025,11 @@ async function chargeInstance(instance, userId, runId = null) {
     instance.status_reason = qpUsername
       ? `Missing Terminal Credentials for QP Username: ${qpUsername}`
       : "Missing QP Username (required for terminal key lookup)";
+    instance.last_response_payload = {
+      source: "pre_api_validation",
+      reason: instance.status_reason,
+    };
+    instance.completed_at = new Date();
     await instance.save();
     throw new Error(instance.status_reason);
   }
@@ -1086,16 +1092,71 @@ exports.processChargeInstance = catchAsync(async (req, res, next) => {
   }
 });
 
-// Random delay 5-15s between bulk charges (human-like)
+// Random delay 5-10s between bulk charges (avoid rate limits)
 const delayBetweenCharges = () =>
   new Promise((resolve) =>
-    setTimeout(resolve, 5000 + Math.random() * 10000),
+    setTimeout(resolve, 5000 + Math.random() * 5000),
   );
 
-// MARK: 6a. Process Multiple Instances by ID list
+// Build and send QP bulk process completion email (success or failure)
+async function sendQPProcessCompletionEmail({
+  to,
+  success,
+  count,
+  fileName,
+  chargeFileId,
+  successCount = 0,
+  declinedCount = 0,
+  errorCount = 0,
+  skippedCount = 0,
+}) {
+  const baseUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+  const viewUrl = `${baseUrl}/dashboard/qp-payment?chargeFileId=${chargeFileId}`;
+  const subject = success
+    ? "QP Payment: bulk process finished"
+    : "QP Payment: your process encountered an error";
+
+  let message;
+  if (success) {
+    const parts = [];
+    if (successCount > 0) parts.push(`<strong>${successCount}</strong> succeeded`);
+    if (declinedCount > 0) parts.push(`<strong>${declinedCount}</strong> declined`);
+    if (errorCount > 0) parts.push(`<strong>${errorCount}</strong> failed`);
+    if (skippedCount > 0) parts.push(`<strong>${skippedCount}</strong> not processed`);
+    const outcomeLine =
+      parts.length > 0
+        ? `Outcomes: ${parts.join(", ")}.`
+        : "No instances were processed.";
+    message = `You ran <strong>${count}</strong> instance${count === 1 ? "" : "s"} from file <strong>${escapeHtml(fileName)}</strong>. ${outcomeLine}`;
+  } else {
+    message = `Your process for <strong>${count}</strong> instances from file <strong>${escapeHtml(fileName)}</strong> encountered an error before finishing. You can check the status using the link below.`;
+  }
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <p style="color: #333; font-size: 16px; line-height: 1.5;">${message}</p>
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="${viewUrl}" style="background-color: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">View results</a>
+      </div>
+      <p style="color: #666; font-size: 12px; text-align: center;">This is an automated message, please do not reply.</p>
+    </div>`;
+  await sendMail({ to, subject, html });
+}
+
+function escapeHtml(s) {
+  if (typeof s !== "string") return "";
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// MARK: 6a. Process Multiple Instances by ID list (async: 202 + background + email)
 // 6a. Process Multiple Instances by ID list
 exports.processMultipleInstances = catchAsync(async (req, res, next) => {
   const userId = req.user?.userId;
+  const userEmail = req.userData?.email;
   const { ids, run_id } = req.body;
 
   if (!Array.isArray(ids) || ids.length === 0) {
@@ -1104,24 +1165,91 @@ exports.processMultipleInstances = catchAsync(async (req, res, next) => {
       .json({ status: "error", message: "ids must be a non-empty array" });
   }
 
-  const results = [];
-  for (let i = 0; i < ids.length; i++) {
-    const id = ids[i];
-    try {
-      const inst = await QPChargeInstance.findById(id);
-      const done = await chargeInstance(inst, userId, run_id);
-      results.push({ id, status: done.status });
-    } catch (e) {
-      results.push({ id, error: e.message });
-    }
-    if (i < ids.length - 1) {
-      await delayBetweenCharges();
-    }
+  const firstInstance = await QPChargeInstance.findById(ids[0]);
+  if (!firstInstance || firstInstance.deleted_at) {
+    return res
+      .status(400)
+      .json({ status: "error", message: "At least one instance not found or invalid" });
   }
 
-  res.status(200).json({
-    status: "success",
-    data: results,
+  const chargeFileId = firstInstance.charge_file_id;
+  const file = await QPChargeFile.findById(chargeFileId);
+  const fileName = file?.file_name || "Unknown file";
+  const runId = run_id || generateRunId();
+  const count = ids.length;
+
+  res.status(202).json({
+    status: "accepted",
+    message: "Processing started",
+    count,
+  });
+
+  setImmediate(async () => {
+    let successCount = 0;
+    let declinedCount = 0;
+    let errorCount = 0;
+    let skippedCount = 0;
+
+    try {
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        const inst = await QPChargeInstance.findById(id);
+        if (!inst || inst.deleted_at) {
+          skippedCount++;
+          continue;
+        }
+        const reservationLabel =
+          (inst.reservation_id && String(inst.reservation_id).trim()) ||
+          `(no reservation id, instance ${id})`;
+        try {
+          const done = await chargeInstance(inst, userId, runId);
+          if (done.status === "SUCCESS") successCount++;
+          else if (done.status === "DECLINED") declinedCount++;
+          else errorCount++;
+        } catch (instanceErr) {
+          errorCount++;
+          console.error(
+            `QP bulk process failed (Reservation ID: ${reservationLabel}):`,
+            instanceErr.message,
+          );
+        }
+        if (i < ids.length - 1) {
+          await delayBetweenCharges();
+        }
+      }
+      if (userEmail) {
+        await sendQPProcessCompletionEmail({
+          to: userEmail,
+          success: true,
+          count,
+          fileName,
+          chargeFileId: String(chargeFileId),
+          successCount,
+          declinedCount,
+          errorCount,
+          skippedCount,
+        });
+      }
+    } catch (err) {
+      console.error("QP bulk process background error:", err);
+      if (userEmail) {
+        try {
+          await sendQPProcessCompletionEmail({
+            to: userEmail,
+            success: false,
+            count,
+            fileName,
+            chargeFileId: String(chargeFileId),
+            successCount,
+            declinedCount,
+            errorCount,
+            skippedCount,
+          });
+        } catch (emailErr) {
+          console.error("Failed to send QP process failure email:", emailErr);
+        }
+      }
+    }
   });
 });
 
@@ -1273,11 +1401,24 @@ exports.createAndProcessSingle = catchAsync(async (req, res, next) => {
 // 7. Process Bulk Run for a Charge File
 exports.processChargeFile = catchAsync(async (req, res, next) => {
   const userId = req.user?.userId;
+  const userEmail = req.userData?.email;
   const fileId = req.params.id;
 
   const file = await QPChargeFile.findById(fileId);
   if (!file)
     return res.status(404).json({ status: "error", message: "File not found" });
+
+  const alreadyProcessing = await QPChargeFile.findOne({
+    status: "PROCESSING",
+    deleted_at: null,
+  });
+  if (alreadyProcessing) {
+    return res.status(409).json({
+      status: "error",
+      message:
+        "One file is already being processed. Please wait for it to finish before starting another.",
+    });
+  }
 
   file.status = "PROCESSING";
   const runId = generateRunId();
@@ -1295,18 +1436,18 @@ exports.processChargeFile = catchAsync(async (req, res, next) => {
   );
 
   // Execute processing asynchronously in the background so response is immediate
-  processBulkRunAsync(file, runId, userId).catch((err) =>
+  processBulkRunAsync(file, runId, userId, userEmail).catch((err) =>
     console.error("Bulk run error", err),
   );
 
   res.status(202).json({
     status: "success",
-    message: "Processing started in background",
+    message: "Processing started in background. You will receive an email when it is done.",
     data: { run_id: runId },
   });
 });
 
-async function processBulkRunAsync(file, runId, userId) {
+async function processBulkRunAsync(file, runId, userId, userEmail) {
   // Fetch pending instances in order
   const instances = await QPChargeInstance.find({
     charge_file_id: file._id,
@@ -1373,7 +1514,7 @@ async function processBulkRunAsync(file, runId, userId) {
     instance.completed_at = new Date();
     await instance.save();
 
-    // Delay between charges (5-15s) for human-like spacing
+    // Delay between charges (5-10s) to avoid rate limits
     const idx = instances.indexOf(instance);
     if (idx >= 0 && idx < instances.length - 1) {
       await delayBetweenCharges();
@@ -1385,6 +1526,24 @@ async function processBulkRunAsync(file, runId, userId) {
   file.declined_count += declined;
   file.error_count += errCount;
   file.processed_rows += instances.length;
+
+  if (userEmail) {
+    try {
+      await sendQPProcessCompletionEmail({
+        to: userEmail,
+        success: true,
+        count: instances.length,
+        fileName: file.file_name || "Unknown file",
+        chargeFileId: String(file._id),
+        successCount: success,
+        declinedCount: declined,
+        errorCount: errCount,
+        skippedCount: 0,
+      });
+    } catch (emailErr) {
+      console.error("Failed to send file bulk run completion email:", emailErr);
+    }
+  }
 
   // Generate and store compiled file after processing completes
   const allInstances = await QPChargeInstance.find({
