@@ -57,6 +57,42 @@ const catchAsync = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
 
+/**
+ * Mongoose casts string ObjectIds in find/countDocuments but aggregate $match does not.
+ * Without this, filtered stats (totalAmount, uniqueHotels) can be 0 while rows still return.
+ */
+function cloneMatchForAggregate(match) {
+  if (!match || typeof match !== "object") return match;
+  const out = {};
+  for (const key of Object.keys(match)) {
+    if (key === "$or" || key === "$and") {
+      out[key] = match[key].map((clause) => cloneMatchForAggregate(clause));
+    } else if (key === "charge_file_id") {
+      const v = match[key];
+      if (typeof v === "string" && mongoose.Types.ObjectId.isValid(v)) {
+        out[key] = new mongoose.Types.ObjectId(v);
+      } else if (
+        v &&
+        typeof v === "object" &&
+        Array.isArray(v.$nin)
+      ) {
+        out[key] = {
+          $nin: v.$nin.map((id) =>
+            id != null && mongoose.Types.ObjectId.isValid(String(id))
+              ? new mongoose.Types.ObjectId(String(id))
+              : id,
+          ),
+        };
+      } else {
+        out[key] = v;
+      }
+    } else {
+      out[key] = match[key];
+    }
+  }
+  return out;
+}
+
 // MARK: Map Row to Instance
 const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
   const normalize = (str) =>
@@ -117,9 +153,13 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     amount_numeric:
       parseFloat(getVal("Amount to charge", "amount", "Amount")) || null,
     currency: getVal("Currency", "Curency", "currency") || "USD",
+    // QP Username before OTA Billing Name: templates often have both; billing name may be
+    // "Expedia Group" while terminal lookup must use the per-hotel QP Username column.
     user_id: getVal(
-      "OTA Billing Name",
       "QP Username",
+      "QP Username*",
+      "OTA Billing Name",
+      "OTA Billing Name*",
       "Name",
       "Username",
       "User ID",
@@ -543,7 +583,7 @@ exports.getChargeInstances = catchAsync(async (req, res, next) => {
 
   // Stats aggregation for amount and uniqueHotels only (totalCount from countDocuments above)
   const statsAgg = await QPChargeInstance.aggregate([
-    { $match: match },
+    { $match: cloneMatchForAggregate(match) },
     {
       $group: {
         _id: null,
