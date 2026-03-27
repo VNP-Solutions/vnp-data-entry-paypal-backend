@@ -569,7 +569,11 @@ const uploadFile = async (req, res) => {
       );
       try {
         await fs.writeFile(tempPath, fileBuffer);
-        const chargeFile = await importChargeFileFromPath(
+        const {
+          chargeFile,
+          skipped_duplicate_reservation_rows,
+          duplicate_reservation_ids,
+        } = await importChargeFileFromPath(
           tempPath,
           userId,
           originalFileName,
@@ -607,6 +611,8 @@ const uploadFile = async (req, res) => {
             totalRows: chargeFile.total_rows,
             paymentGateway: "qp",
             linkedQpChargeFileId: chargeFile._id,
+            skipped_duplicate_reservation_rows,
+            duplicate_reservation_ids,
           },
         });
       } finally {

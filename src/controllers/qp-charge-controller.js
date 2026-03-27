@@ -22,7 +22,7 @@
  * Get Single Charge Instance / Update Charge Instance / Delete Charge Instance
  *   CRUD for one instance with validation.
  * Helper – instance to export row (template column order + Status Reason, Provider Txn ID, Processed At)
- *   instanceToExportRow: template headers (Hotel ID*, Portfolio*, Hotel Name*, ... Charge Status) then Status Reason, Provider Txn ID, Processed At. Decrypts card/CVV.
+ *   instanceToExportRow: template headers (Hotel ID*, …; Address/City/State/Zip Code without *) then Status Reason, Provider Txn ID, Processed At. Decrypts card/CVV.
  * Export Filtered Charge Instances
  *   XLSX download of instances (filter by file, status, ids) using instanceToExportRow.
  * Process Single Instance / Process Multiple by ID list / Create and process single (manual entry)
@@ -43,6 +43,7 @@ const mongoose = require("mongoose");
 
 const QPChargeFile = require("../models/QPChargeFile");
 const QPChargeInstance = require("../models/QPChargeInstance");
+const QPPaymentAttempt = require("../models/QPPaymentAttempt");
 const UploadSession = require("../models/UploadSession");
 const User = require("../models/User");
 const { encrypt, decrypt } = require("../utils/encryption");
@@ -168,11 +169,18 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     ),
 
     billing_address: {
-      address_1: getVal("Address", "Address 1", "address_1"),
+      address_1: getVal("Address*", "Address", "Address 1", "address_1"),
       address_2: getVal("Address 2", "address_2"),
-      city: getVal("City", "city"),
-      state: getVal("State", "state"),
-      postal_code: getVal("Zip Code", "Zip", "Postal Code", "zip", "postal_code"),
+      city: getVal("City*", "City", "city"),
+      state: getVal("State*", "State", "state"),
+      postal_code: getVal(
+        "Zip Code*",
+        "Zip Code",
+        "Zip",
+        "Postal Code",
+        "zip",
+        "postal_code",
+      ),
       country_code: getVal("Country", "country", "Country Code") || "US",
     },
 
@@ -399,6 +407,66 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
     }
   }
 
+  // Global reservation ID uniqueness: skip rows whose reservation already exists on any
+  // non-deleted instance or appears on any QP payment attempt (order_id in redacted payload).
+  const reservationCandidates = [
+    ...new Set(
+      instancesToInsert
+        .filter((inst) => inst.status !== "INVALID" && inst.status !== "SKIPPED")
+        .map((inst) => String(inst.reservation_id || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+
+  const globalTakenReservations = new Set();
+  if (reservationCandidates.length > 0) {
+    const [fromInstances, fromAttempts] = await Promise.all([
+      QPChargeInstance.distinct("reservation_id", {
+        deleted_at: null,
+        reservation_id: { $in: reservationCandidates },
+      }),
+      QPPaymentAttempt.distinct("request_payload_redacted.order.order_id", {
+        "request_payload_redacted.order.order_id": {
+          $in: reservationCandidates,
+        },
+      }),
+    ]);
+    for (const v of [...fromInstances, ...fromAttempts]) {
+      const t = String(v || "").trim();
+      if (t) globalTakenReservations.add(t);
+    }
+  }
+
+  const seenReservationInFile = new Set();
+  const skippedRowsForReservationEmail = [];
+
+  for (const inst of instancesToInsert) {
+    if (inst.status === "INVALID" || inst.status === "SKIPPED") continue;
+    const rid = String(inst.reservation_id || "").trim();
+    if (!rid) continue;
+
+    if (globalTakenReservations.has(rid)) {
+      inst.status = "SKIPPED";
+      inst.status_reason =
+        "Reservation ID already exists in the system or was submitted to QuantumPay before.";
+      inst.is_duplicate = true;
+      validRows--;
+      invalidRows++;
+      skippedRowsForReservationEmail.push(rid);
+      continue;
+    }
+    if (seenReservationInFile.has(rid)) {
+      inst.status = "SKIPPED";
+      inst.status_reason = "Duplicate reservation ID in this file.";
+      inst.is_duplicate = true;
+      validRows--;
+      invalidRows++;
+      skippedRowsForReservationEmail.push(rid);
+      continue;
+    }
+    seenReservationInFile.add(rid);
+  }
+
   if (instancesToInsert.length > 0) {
     await QPChargeInstance.insertMany(instancesToInsert);
   }
@@ -409,7 +477,41 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
   chargeFile.status = "IMPORTED";
   await chargeFile.save();
 
-  return chargeFile;
+  if (skippedRowsForReservationEmail.length > 0 && userId) {
+    try {
+      const user = await User.findById(userId).select("email").lean();
+      const to = user?.email;
+      if (to) {
+        const uniqueIds = [...new Set(skippedRowsForReservationEmail)].sort();
+        const n = skippedRowsForReservationEmail.length;
+        const idListHtml = uniqueIds
+          .map((id) => `<li>${escapeHtml(id)}</li>`)
+          .join("");
+        const subject = "QP charge upload: duplicate reservation IDs skipped";
+        const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <p style="color: #333; font-size: 16px; line-height: 1.5;">You uploaded charge file <strong>${escapeHtml(originalFileName)}</strong>.</p>
+      <p style="color: #333; font-size: 16px; line-height: 1.5;"><strong>${n}</strong> row${n === 1 ? " was" : "s were"} not imported because the reservation ID${n === 1 ? "" : "s"} already exist in the system or were previously sent to QuantumPay.</p>
+      <p style="color: #333; font-size: 15px;">Reservation IDs (${uniqueIds.length} unique):</p>
+      <ul style="color: #333; font-size: 14px;">${idListHtml}</ul>
+      <p style="color: #666; font-size: 12px; margin-top: 24px;">This is an automated message, please do not reply.</p>
+    </div>`;
+        await sendMail({ to, subject, html });
+      }
+    } catch (err) {
+      TraceLogger.warn(
+        "QP_IMPORT_RESERVATION_EMAIL_FAILED",
+        err?.message || String(err),
+        { charge_file_id: chargeFile._id, actor_user_id: userId },
+      );
+    }
+  }
+
+  return {
+    chargeFile,
+    skipped_duplicate_reservation_rows: skippedRowsForReservationEmail.length,
+    duplicate_reservation_ids: [...new Set(skippedRowsForReservationEmail)].sort(),
+  };
 }
 
 // MARK: 1b. Import Charging Sheet (HTTP handler)
@@ -423,7 +525,11 @@ exports.importChargeFile = catchAsync(async (req, res, next) => {
       .json({ status: "error", message: "File is required" });
   }
 
-  const chargeFile = await importChargeFileFromPath(
+  const {
+    chargeFile,
+    skipped_duplicate_reservation_rows,
+    duplicate_reservation_ids,
+  } = await importChargeFileFromPath(
     req.file.path,
     userId,
     req.file.originalname,
@@ -441,6 +547,7 @@ exports.importChargeFile = catchAsync(async (req, res, next) => {
         total_rows: chargeFile.total_rows,
         valid_rows: chargeFile.valid_rows,
         invalid_rows: chargeFile.invalid_rows,
+        skipped_duplicate_reservation_rows,
       },
     },
   );
@@ -452,6 +559,8 @@ exports.importChargeFile = catchAsync(async (req, res, next) => {
       total_rows: chargeFile.total_rows,
       valid_rows: chargeFile.valid_rows,
       invalid_rows: chargeFile.invalid_rows,
+      skipped_duplicate_reservation_rows,
+      duplicate_reservation_ids,
     },
   });
 });
@@ -983,10 +1092,10 @@ function instanceToExportRow(i) {
     "Expire*": cardExpire,
     "Card CVV*": cardCvv,
     "OTA Billing Name*": i.user_id ?? "",
-    "Address*": i.billing_address?.address_1 ?? "",
-    "City*": i.billing_address?.city ?? "",
-    "State*": i.billing_address?.state ?? "",
-    "Zip Code*": i.billing_address?.postal_code ?? "",
+    Address: i.billing_address?.address_1 ?? "",
+    City: i.billing_address?.city ?? "",
+    State: i.billing_address?.state ?? "",
+    "Zip Code": i.billing_address?.postal_code ?? "",
     "QP Username*": i.user_id ?? "",
     "OTA Name*": i.ota ?? "",
     "VNP Work ID": i.vnp_work_id ?? "",
