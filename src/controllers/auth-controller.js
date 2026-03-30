@@ -144,6 +144,20 @@ const login = async (req, res) => {
             });
         }
         
+        // Check if user is active (e.g. hasn't completed invitation yet)
+        if (!user.isActive) {
+            if (user.isInvited) {
+                return res.status(403).json({
+                    status: 'error',
+                    message: 'Please complete your invitation setup first. Check your email for the invitation link.'
+                });
+            }
+            return res.status(403).json({
+                status: 'error',
+                message: 'This account has been deactivated. Please contact support.'
+            });
+        }
+        
 
         // Check password
         const isPasswordValid = await bcrypt.compare(password, user.password);
@@ -284,6 +298,16 @@ const forgotPassword = async (req, res) => {
         // If user doesn't exist, still return success but don't send email
         if (!user) {
             return res.status(200).json(response);
+        }
+        
+        // Block unactivated invitation users from resetting passwords to bypass
+        if (!user.isActive && user.isInvited) {
+            // we could return the generic response, but it's better UX to tell them 
+            // why they can't reset their password right now if they complain.
+            return res.status(403).json({
+                status: 'error',
+                message: 'This account has not been activated yet. Please complete your invitation setup first.'
+            });
         }
 
         // Check for recent reset attempts (rate limiting)
