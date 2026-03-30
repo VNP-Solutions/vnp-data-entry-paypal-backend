@@ -418,22 +418,45 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
     ),
   ];
 
-  const globalTakenReservations = new Set();
+  const globalTakenReservationsMap = new Map();
   if (reservationCandidates.length > 0) {
+    const archivedSessions = await UploadSession.find(
+      { paymentGateway: "qp", archive: true, linkedQpChargeFileId: { $ne: null } },
+      { linkedQpChargeFileId: 1 },
+    ).lean();
+    const archivedChargeFileIds = archivedSessions
+      .map((s) => s.linkedQpChargeFileId)
+      .filter(Boolean);
+
+    const instanceQuery = {
+      deleted_at: null,
+      reservation_id: { $in: reservationCandidates },
+    };
+    if (archivedChargeFileIds.length > 0) {
+      instanceQuery.charge_file_id = { $nin: archivedChargeFileIds };
+    }
+
     const [fromInstances, fromAttempts] = await Promise.all([
-      QPChargeInstance.distinct("reservation_id", {
-        deleted_at: null,
-        reservation_id: { $in: reservationCandidates },
-      }),
-      QPPaymentAttempt.distinct("request_payload_redacted.order.order_id", {
+      QPChargeInstance.find(instanceQuery).select("reservation_id parent_file_name").lean(),
+      QPPaymentAttempt.find({
         "request_payload_redacted.order.order_id": {
           $in: reservationCandidates,
         },
-      }),
+      }).select("request_payload_redacted.order.order_id createdAt").lean(),
     ]);
-    for (const v of [...fromInstances, ...fromAttempts]) {
-      const t = String(v || "").trim();
-      if (t) globalTakenReservations.add(t);
+    
+    for (const inst of fromInstances) {
+      const t = String(inst.reservation_id || "").trim();
+      if (t && !globalTakenReservationsMap.has(t)) {
+        globalTakenReservationsMap.set(t, { type: 'instance', filename: inst.parent_file_name || 'an existing file' });
+      }
+    }
+    for (const attempt of fromAttempts) {
+      const orderId = attempt.request_payload_redacted?.order?.order_id;
+      const t = String(orderId || "").trim();
+      if (t && !globalTakenReservationsMap.has(t)) {
+        globalTakenReservationsMap.set(t, { type: 'attempt', date: attempt.createdAt });
+      }
     }
   }
 
@@ -445,14 +468,21 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
     const rid = String(inst.reservation_id || "").trim();
     if (!rid) continue;
 
-    if (globalTakenReservations.has(rid)) {
+    if (globalTakenReservationsMap.has(rid)) {
+      const reasonInfo = globalTakenReservationsMap.get(rid);
       inst.status = "SKIPPED";
-      inst.status_reason =
-        "Reservation ID already exists in the system or was submitted to QuantumPay before.";
+      
+      if (reasonInfo.type === 'instance') {
+        inst.status_reason = `Reservation ID already exists in file: ${reasonInfo.filename}`;
+      } else {
+        const dateStr = reasonInfo.date ? new Date(reasonInfo.date).toLocaleDateString() : 'an earlier date';
+        inst.status_reason = `Payment made on ${dateStr} using reservation ID`;
+      }
+      
       inst.is_duplicate = true;
       validRows--;
       invalidRows++;
-      skippedRowsForReservationEmail.push(rid);
+      skippedRowsForReservationEmail.push({ id: rid, info: reasonInfo });
       continue;
     }
     if (seenReservationInFile.has(rid)) {
@@ -461,7 +491,7 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
       inst.is_duplicate = true;
       validRows--;
       invalidRows++;
-      skippedRowsForReservationEmail.push(rid);
+      skippedRowsForReservationEmail.push({ id: rid, info: { type: 'current_file' } });
       continue;
     }
     seenReservationInFile.add(rid);
@@ -482,18 +512,60 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
       const user = await User.findById(userId).select("email").lean();
       const to = user?.email;
       if (to) {
-        const uniqueIds = [...new Set(skippedRowsForReservationEmail)].sort();
+        // Deduplicate the array by ID
+        const uniqueSkipped = [];
+        const seenIds = new Set();
+        for (const item of skippedRowsForReservationEmail) {
+           if (!seenIds.has(item.id)) {
+              seenIds.add(item.id);
+              uniqueSkipped.push(item);
+           }
+        }
         const n = skippedRowsForReservationEmail.length;
-        const idListHtml = uniqueIds
-          .map((id) => `<li>${escapeHtml(id)}</li>`)
-          .join("");
+
+        // Group by category
+        const groups = {
+           instance: [],
+           attempt: [],
+           current_file: []
+        };
+        for (const item of uniqueSkipped) {
+           groups[item.info.type].push(item);
+        }
+
+        let listsHtml = "";
+        
+        if (groups.instance.length > 0) {
+           listsHtml += `<p style="color: #333; font-size: 15px; font-weight: bold; margin-bottom: 4px;">Reservation ID from existing charge file:</p><ul style="color: #333; font-size: 14px; margin-top: 0;">`;
+           for (const item of groups.instance) {
+              listsHtml += `<li><strong>${escapeHtml(item.id)}</strong> (File: ${escapeHtml(item.info.filename)})</li>`;
+           }
+           listsHtml += `</ul>`;
+        }
+        
+        if (groups.attempt.length > 0) {
+           listsHtml += `<p style="color: #333; font-size: 15px; font-weight: bold; margin-bottom: 4px;">Payment made previously using reservation ID:</p><ul style="color: #333; font-size: 14px; margin-top: 0;">`;
+           for (const item of groups.attempt) {
+              const dateStr = item.info.date ? new Date(item.info.date).toLocaleDateString() : 'earlier date';
+              listsHtml += `<li><strong>${escapeHtml(item.id)}</strong> (Date: ${escapeHtml(dateStr)})</li>`;
+           }
+           listsHtml += `</ul>`;
+        }
+        
+        if (groups.current_file.length > 0) {
+           listsHtml += `<p style="color: #333; font-size: 15px; font-weight: bold; margin-bottom: 4px;">Duplicate reservation ID within this uploaded file itself:</p><ul style="color: #333; font-size: 14px; margin-top: 0;">`;
+           for (const item of groups.current_file) {
+              listsHtml += `<li><strong>${escapeHtml(item.id)}</strong></li>`;
+           }
+           listsHtml += `</ul>`;
+        }
+
         const subject = "QP charge upload: duplicate reservation IDs skipped";
         const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <p style="color: #333; font-size: 16px; line-height: 1.5;">You uploaded charge file <strong>${escapeHtml(originalFileName)}</strong>.</p>
-      <p style="color: #333; font-size: 16px; line-height: 1.5;"><strong>${n}</strong> row${n === 1 ? " was" : "s were"} not imported because the reservation ID${n === 1 ? "" : "s"} already exist in the system or were previously sent to QuantumPay.</p>
-      <p style="color: #333; font-size: 15px;">Reservation IDs (${uniqueIds.length} unique):</p>
-      <ul style="color: #333; font-size: 14px;">${idListHtml}</ul>
+      <p style="color: #333; font-size: 16px; line-height: 1.5;"><strong>${n}</strong> row${n === 1 ? " was" : "s were"} not imported due to duplicate reservation IDs.</p>
+      ${listsHtml}
       <p style="color: #666; font-size: 12px; margin-top: 24px;">This is an automated message, please do not reply.</p>
     </div>`;
         await sendMail({ to, subject, html });
@@ -510,7 +582,7 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
   return {
     chargeFile,
     skipped_duplicate_reservation_rows: skippedRowsForReservationEmail.length,
-    duplicate_reservation_ids: [...new Set(skippedRowsForReservationEmail)].sort(),
+    duplicate_reservation_ids: [...new Set(skippedRowsForReservationEmail.map(item => item.id))].sort(),
   };
 }
 

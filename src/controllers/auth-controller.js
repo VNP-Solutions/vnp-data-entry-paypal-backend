@@ -91,6 +91,8 @@ function generatePendingSessionToken() {
 
 // Send OTP email
 async function sendOTPEmail(email, otp, userName) {
+    console.log(`\x1b[36m🔑 OTP for ${email}: ${otp}\x1b[0m`);
+    
     const mailOptions = {
         from: process.env.EMAIL_USER || 'your-email@gmail.com',
         to: email,
