@@ -15,6 +15,7 @@ const otaController = require("./src/controllers/ota-controller");
 const terminalCredentialController = require("./src/controllers/terminal-credential-controller");
 const qpChargeController = require("./src/controllers/qp-charge-controller");
 const qpLogController = require("./src/controllers/qp-log-controller");
+const userController = require("./src/controllers/user-controller");
 const { authenticateToken } = require("./src/middleware/auth");
 const multer = require("multer");
 const swaggerUi = require("swagger-ui-express");
@@ -188,6 +189,13 @@ app.post("/api/invitations/complete", invitationController.completeInvitation);
 // Protected Routes (require authentication)
 app.get("/api/auth/profile", authenticateToken, authController.getProfile);
 app.put("/api/auth/profile", authenticateToken, authController.updateProfile);
+
+// User Management Routes (protected)
+app.get("/api/users", authenticateToken, userController.getUsers);
+app.get("/api/users/:id", authenticateToken, userController.getUserById);
+app.patch("/api/users/:id", authenticateToken, userController.updateUser);
+app.patch("/api/users/:id/status", authenticateToken, userController.updateUserStatus);
+app.delete("/api/users/:id", authenticateToken, userController.deleteUser);
 
 // File Management API Routes (protected with S3 integration)
 app.post(
