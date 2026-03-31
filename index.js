@@ -194,7 +194,11 @@ app.put("/api/auth/profile", authenticateToken, authController.updateProfile);
 app.get("/api/users", authenticateToken, userController.getUsers);
 app.get("/api/users/:id", authenticateToken, userController.getUserById);
 app.patch("/api/users/:id", authenticateToken, userController.updateUser);
-app.patch("/api/users/:id/status", authenticateToken, userController.updateUserStatus);
+app.patch(
+  "/api/users/:id/status",
+  authenticateToken,
+  userController.updateUserStatus,
+);
 app.delete("/api/users/:id", authenticateToken, userController.deleteUser);
 
 // File Management API Routes (protected with S3 integration)
@@ -503,6 +507,21 @@ app.post(
   "/api/qp-charge-files/:id/process",
   authenticateToken,
   qpChargeController.processChargeFile,
+);
+app.get(
+  "/api/qp-charge-files/queue",
+  authenticateToken,
+  qpChargeController.getQueue,
+);
+app.patch(
+  "/api/qp-charge-files/:id/queue",
+  authenticateToken,
+  qpChargeController.updateQueue,
+);
+app.delete(
+  "/api/qp-charge-files/:id/queue",
+  authenticateToken,
+  qpChargeController.removeFromQueue,
 );
 app.get(
   "/api/qp-charge-files/:id/export",

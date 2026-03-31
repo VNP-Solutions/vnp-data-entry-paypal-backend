@@ -39,12 +39,12 @@ async function processBatch(
   excelDataRecords,
   uploadId,
   batchNumber,
-  paymentGateway = "paypal"
+  paymentGateway = "paypal",
 ) {
   try {
     if (excelDataRecords.length === 0) {
       console.log(
-        `\x1b[33m⚠️  Batch ${batchNumber}: No records to process\x1b[0m`
+        `\x1b[33m⚠️  Batch ${batchNumber}: No records to process\x1b[0m`,
       );
       return 0;
     }
@@ -55,7 +55,7 @@ async function processBatch(
     console.log(
       `\x1b[36m📤 Processing batch ${batchNumber}: ${
         excelDataRecords.length
-      } records (${paymentGateway.toUpperCase()})\x1b[0m`
+      } records (${paymentGateway.toUpperCase()})\x1b[0m`,
     );
 
     // Use optimized bulkWrite with better options
@@ -67,11 +67,11 @@ async function processBatch(
         {
           ordered: false, // Continue processing even if some records fail
           writeConcern: { w: 1, j: false }, // Faster writes with journal disabled for bulk ops
-        }
+        },
       );
 
       console.log(
-        `\x1b[32m✅ Batch ${batchNumber} SUCCESS: Saved ${result.insertedCount}/${excelDataRecords.length} records\x1b[0m`
+        `\x1b[32m✅ Batch ${batchNumber} SUCCESS: Saved ${result.insertedCount}/${excelDataRecords.length} records\x1b[0m`,
       );
       return result.insertedCount;
     } catch (bulkWriteError) {
@@ -86,18 +86,18 @@ async function processBatch(
           : 0;
         const failedInserts = excelDataRecords.length - successfulInserts;
         console.log(
-          `\x1b[33m⚠️  Batch ${batchNumber} PARTIAL SUCCESS: Saved ${successfulInserts}/${excelDataRecords.length} records (${failedInserts} duplicates/errors skipped)\x1b[0m`
+          `\x1b[33m⚠️  Batch ${batchNumber} PARTIAL SUCCESS: Saved ${successfulInserts}/${excelDataRecords.length} records (${failedInserts} duplicates/errors skipped)\x1b[0m`,
         );
         return successfulInserts;
       }
       console.log(
-        `\x1b[31m❌ Batch ${batchNumber} ERROR: Failed to save records - ${bulkWriteError.message}\x1b[0m`
+        `\x1b[31m❌ Batch ${batchNumber} ERROR: Failed to save records - ${bulkWriteError.message}\x1b[0m`,
       );
       throw bulkWriteError;
     }
   } catch (error) {
     console.log(
-      `\x1b[31m❌ Batch ${batchNumber} CRITICAL ERROR: ${error.message}\x1b[0m`
+      `\x1b[31m❌ Batch ${batchNumber} CRITICAL ERROR: ${error.message}\x1b[0m`,
     );
     console.error(`Error processing batch ${batchNumber}:`, error);
     throw error;
@@ -159,7 +159,7 @@ async function processFileInBackground(uploadSession, fileBuffer) {
     console.log(
       `\x1b[34m🚀 BACKGROUND PROCESSING: File "${uploadSession.fileName}" - ${
         uploadSession.totalRows
-      } rows, ${uploadSession.paymentGateway.toUpperCase()} gateway\x1b[0m`
+      } rows, ${uploadSession.paymentGateway.toUpperCase()} gateway\x1b[0m`,
     );
 
     // Read the Excel file from buffer (no S3 download needed)
@@ -192,7 +192,7 @@ async function processFileInBackground(uploadSession, fileBuffer) {
     console.log(
       `\x1b[36m📊 Bulk OTA lookup complete: ${
         Object.keys(otaLookupMap).length
-      } OTA records found\x1b[0m`
+      } OTA records found\x1b[0m`,
     );
 
     // Process data in optimized batches
@@ -285,11 +285,11 @@ async function processFileInBackground(uploadSession, fileBuffer) {
           // Debug: Log what's being saved to database
           console.log(
             `\x1b[42m💾 DATABASE SAVE DEBUG - Check In:\x1b[0m`,
-            encryptedData["Check In"]
+            encryptedData["Check In"],
           );
           console.log(
             `\x1b[43m💾 DATABASE SAVE DEBUG - Check Out:\x1b[0m`,
-            encryptedData["Check Out"]
+            encryptedData["Check Out"],
           );
 
           excelDataRecords.push(encryptedData);
@@ -302,7 +302,7 @@ async function processFileInBackground(uploadSession, fileBuffer) {
           excelDataRecords,
           uploadSession.uploadId,
           batchNumber,
-          uploadSession.paymentGateway
+          uploadSession.paymentGateway,
         );
         totalProcessed += processedCount;
 
@@ -316,7 +316,7 @@ async function processFileInBackground(uploadSession, fileBuffer) {
                 ? "completed"
                 : "processing",
           },
-          { session }
+          { session },
         );
       }
 
@@ -335,11 +335,11 @@ async function processFileInBackground(uploadSession, fileBuffer) {
         status: "completed",
         completedAt: new Date(),
       },
-      { session }
+      { session },
     );
 
     console.log(
-      `\x1b[32m✅ BACKGROUND PROCESSING COMPLETE: File "${uploadSession.fileName}" processed successfully - ${totalProcessed} records saved\x1b[0m`
+      `\x1b[32m✅ BACKGROUND PROCESSING COMPLETE: File "${uploadSession.fileName}" processed successfully - ${totalProcessed} records saved\x1b[0m`,
     );
 
     // Delete file from S3 after successful processing
@@ -352,7 +352,7 @@ async function processFileInBackground(uploadSession, fileBuffer) {
     await session.abortTransaction();
 
     console.log(
-      `\x1b[31m❌ BACKGROUND PROCESSING ERROR: Failed to process file - ${error.message}\x1b[0m`
+      `\x1b[31m❌ BACKGROUND PROCESSING ERROR: Failed to process file - ${error.message}\x1b[0m`,
     );
 
     // Update session status to failed
@@ -362,7 +362,7 @@ async function processFileInBackground(uploadSession, fileBuffer) {
         {
           status: "failed",
           errorMessage: error.message,
-        }
+        },
       );
     } catch (sessionError) {
       console.error("Error updating session status:", sessionError);
@@ -378,12 +378,12 @@ function normalizeDateField(dateValue) {
     `\x1b[33m🔍 DATE DEBUG - Input value:\x1b[0m`,
     dateValue,
     `\x1b[33mType:\x1b[0m`,
-    typeof dateValue
+    typeof dateValue,
   );
 
   if (!dateValue) {
     console.log(
-      `\x1b[31m❌ DATE DEBUG - Empty/null value, returning null\x1b[0m`
+      `\x1b[31m❌ DATE DEBUG - Empty/null value, returning null\x1b[0m`,
     );
     return null;
   }
@@ -393,7 +393,7 @@ function normalizeDateField(dateValue) {
     const serial = Number(dateValue);
     console.log(
       `\x1b[36m📊 DATE DEBUG - Processing as Excel serial number:\x1b[0m`,
-      serial
+      serial,
     );
 
     // Excel's epoch starts at 1899-12-30
@@ -411,7 +411,7 @@ function normalizeDateField(dateValue) {
 
     console.log(
       `\x1b[32m✅ DATE DEBUG - Final result (from serial):\x1b[0m`,
-      result
+      result,
     );
     return result;
   }
@@ -420,7 +420,7 @@ function normalizeDateField(dateValue) {
   const stringResult = dateValue.toString().trim();
   console.log(
     `\x1b[35m📝 DATE DEBUG - Processing as string, result:\x1b[0m`,
-    stringResult
+    stringResult,
   );
   return stringResult;
 }
@@ -500,11 +500,11 @@ const uploadFile = async (req, res) => {
       .replace(/[:.]/g, "-")
       .slice(0, -5);
     const fileExtension = originalFileName.substring(
-      originalFileName.lastIndexOf(".")
+      originalFileName.lastIndexOf("."),
     );
     const fileNameWithoutExt = originalFileName.substring(
       0,
-      originalFileName.lastIndexOf(".")
+      originalFileName.lastIndexOf("."),
     );
     const fileName = `${fileNameWithoutExt}_${timestamp}${fileExtension}`;
 
@@ -573,11 +573,7 @@ const uploadFile = async (req, res) => {
           chargeFile,
           skipped_duplicate_reservation_rows,
           duplicate_reservation_ids,
-        } = await importChargeFileFromPath(
-          tempPath,
-          userId,
-          originalFileName,
-        );
+        } = await importChargeFileFromPath(tempPath, userId, originalFileName);
         const uploadId = generateUploadId();
         const uploadSession = new UploadSession({
           uploadId,
@@ -636,7 +632,7 @@ const uploadFile = async (req, res) => {
     console.log(
       `\x1b[34m🚀 UPLOAD INITIATED: File "${fileName}" - ${
         totalRows - 1
-      } rows, ${paymentGateway.toUpperCase()} gateway\x1b[0m`
+      } rows, ${paymentGateway.toUpperCase()} gateway\x1b[0m`,
     );
 
     // Create upload session
@@ -680,7 +676,7 @@ const uploadFile = async (req, res) => {
     });
   } catch (error) {
     console.log(
-      `\x1b[31m❌ UPLOAD ERROR: Failed to initiate upload - ${error.message}\x1b[0m`
+      `\x1b[31m❌ UPLOAD ERROR: Failed to initiate upload - ${error.message}\x1b[0m`,
     );
     console.error("Upload error:", error);
 
@@ -692,7 +688,7 @@ const uploadFile = async (req, res) => {
           {
             status: "failed",
             errorMessage: error.message,
-          }
+          },
         );
         // Clean up S3 file on error
         await s3Service.deleteFile(req.file.key);
@@ -708,7 +704,6 @@ const uploadFile = async (req, res) => {
     });
   }
 };
-
 
 const getUploadFileSummaries = async (req, res) => {
   try {
@@ -740,7 +735,6 @@ const getUploadFileSummaries = async (req, res) => {
     });
   }
 };
-
 
 // Get all row data from all users
 const getRowData = async (req, res) => {
@@ -811,7 +805,6 @@ const getRowData = async (req, res) => {
           const decryptedData = decryptCardData(excelData);
 
           // Debug: Log what's being retrieved from database and sent to UI
-          
 
           return {
             id: _id,
@@ -1040,7 +1033,7 @@ const updateSheet = async (req, res) => {
     const encryptedUpdateData = encryptCardData(mappedUpdateData);
 
     console.log(
-      `\x1b[36m📝 Updating record: Document ID ${documentId} (${paymentGateway.toUpperCase()})\x1b[0m`
+      `\x1b[36m📝 Updating record: Document ID ${documentId} (${paymentGateway.toUpperCase()})\x1b[0m`,
     );
 
     // Update the document with new data
@@ -1051,12 +1044,12 @@ const updateSheet = async (req, res) => {
       {
         $set: encryptedUpdateData,
       },
-      { new: true }
+      { new: true },
     ).populate("otaId", "name displayName customer billingAddress isActive"); // Populate OTA data
 
     if (!updateResult) {
       console.log(
-        `\x1b[31m❌ UPDATE FAILED: Document not found - ID: ${documentId}\x1b[0m`
+        `\x1b[31m❌ UPDATE FAILED: Document not found - ID: ${documentId}\x1b[0m`,
       );
       return res.status(404).json({
         status: "error",
@@ -1067,7 +1060,7 @@ const updateSheet = async (req, res) => {
     console.log(
       `\x1b[32m✅ UPDATE SUCCESS: Record updated successfully - ID: ${documentId}, Expedia ID: ${
         updateResult["Expedia ID"] || "N/A"
-      }\x1b[0m`
+      }\x1b[0m`,
     );
 
     res.status(200).json({
@@ -1082,7 +1075,7 @@ const updateSheet = async (req, res) => {
     });
   } catch (error) {
     console.log(
-      `\x1b[31m❌ UPDATE ERROR: Failed to update record - Document ID: ${req.params.documentId}, Error: ${error.message}\x1b[0m`
+      `\x1b[31m❌ UPDATE ERROR: Failed to update record - Document ID: ${req.params.documentId}, Error: ${error.message}\x1b[0m`,
     );
     console.error("Update sheet error:", error);
     res.status(500).json({
@@ -1152,7 +1145,7 @@ const deleteFile = async (req, res) => {
     }
 
     console.log(
-      `\x1b[36m🗑️  Deleting record: Document ID ${documentId} (${paymentGateway.toUpperCase()})\x1b[0m`
+      `\x1b[36m🗑️  Deleting record: Document ID ${documentId} (${paymentGateway.toUpperCase()})\x1b[0m`,
     );
 
     // Delete the specific document
@@ -1163,7 +1156,7 @@ const deleteFile = async (req, res) => {
 
     if (!deleteResult) {
       console.log(
-        `\x1b[31m❌ DELETE FAILED: Document not found - ID: ${documentId}\x1b[0m`
+        `\x1b[31m❌ DELETE FAILED: Document not found - ID: ${documentId}\x1b[0m`,
       );
       return res.status(404).json({
         status: "error",
@@ -1174,7 +1167,7 @@ const deleteFile = async (req, res) => {
     console.log(
       `\x1b[32m✅ DELETE SUCCESS: Record deleted successfully - ID: ${documentId}, Expedia ID: ${
         deleteResult["Expedia ID"] || "N/A"
-      }\x1b[0m`
+      }\x1b[0m`,
     );
 
     res.status(200).json({
@@ -1183,7 +1176,7 @@ const deleteFile = async (req, res) => {
     });
   } catch (error) {
     console.log(
-      `\x1b[31m❌ DELETE ERROR: Failed to delete record - Document ID: ${req.params.documentId}, Error: ${error.message}\x1b[0m`
+      `\x1b[31m❌ DELETE ERROR: Failed to delete record - Document ID: ${req.params.documentId}, Error: ${error.message}\x1b[0m`,
     );
     console.error("Delete file error:", error);
     res.status(500).json({
@@ -1275,12 +1268,12 @@ const deleteUploadById = async (req, res) => {
       {
         uploadId: uploadId,
       },
-      { session }
+      { session },
     );
 
     if (sessionDeleteResult) {
       console.log(
-        `\x1b[32m✅ DELETE SUCCESS: Upload session removed - File: ${sessionDeleteResult.fileName}\x1b[0m`
+        `\x1b[32m✅ DELETE SUCCESS: Upload session removed - File: ${sessionDeleteResult.fileName}\x1b[0m`,
       );
     }
 
@@ -1290,7 +1283,7 @@ const deleteUploadById = async (req, res) => {
         await s3Service.deleteFile(uploadSession.s3Key);
       } catch (s3Error) {
         console.log(
-          `S3 file cleanup for ${uploadSession.s3Key}: ${s3Error.message}`
+          `S3 file cleanup for ${uploadSession.s3Key}: ${s3Error.message}`,
         );
         // Don't fail the entire operation if S3 cleanup fails
       }
@@ -1323,7 +1316,7 @@ const deleteUploadById = async (req, res) => {
     await session.abortTransaction();
 
     console.log(
-      `\x1b[31m❌ DELETE UPLOAD ERROR: Failed to delete upload - Upload ID: ${req.params.uploadId}, Error: ${error.message}\x1b[0m`
+      `\x1b[31m❌ DELETE UPLOAD ERROR: Failed to delete upload - Upload ID: ${req.params.uploadId}, Error: ${error.message}\x1b[0m`,
     );
     console.error("Delete upload error:", error);
     res.status(500).json({
@@ -1409,10 +1402,10 @@ const getUploadStatus = async (req, res) => {
           uploadSession.status === "completed"
             ? 100
             : uploadSession.totalRows > 0
-            ? Math.round(
-                (uploadSession.processedRows / uploadSession.totalRows) * 100
-              )
-            : 0,
+              ? Math.round(
+                  (uploadSession.processedRows / uploadSession.totalRows) * 100,
+                )
+              : 0,
         startedAt: uploadSession.startedAt,
         completedAt: uploadSession.completedAt,
         errorMessage: uploadSession.errorMessage,
@@ -1491,6 +1484,13 @@ const getUserUploadSessions = async (req, res) => {
         const paymentGateway = session.paymentGateway || "paypal";
         let totalRows = session.totalRows;
         let processedRows = session.processedRows;
+        let qpStatus = session.status;
+        let qpQueueOrder = null;
+        let qpQueuedAt = null;
+        let qpSuccessCount = 0;
+        let qpDeclinedCount = 0;
+        let qpErrorCount = 0;
+
         if (paymentGateway === "qp" && session.linkedQpChargeFileId) {
           const qpFile = await QPChargeFile.findById(
             session.linkedQpChargeFileId,
@@ -1498,6 +1498,12 @@ const getUserUploadSessions = async (req, res) => {
           if (qpFile) {
             totalRows = qpFile.total_rows || 0;
             processedRows = qpFile.processed_rows || 0;
+            qpStatus = qpFile.status || session.status;
+            qpQueueOrder = qpFile.queue_order || null;
+            qpQueuedAt = qpFile.queued_at || null;
+            qpSuccessCount = qpFile.success_count || 0;
+            qpDeclinedCount = qpFile.declined_count || 0;
+            qpErrorCount = qpFile.error_count || 0;
           }
         }
         return {
@@ -1505,6 +1511,12 @@ const getUserUploadSessions = async (req, res) => {
           _totalRows: totalRows,
           _processedRows: processedRows,
           _chargedCount: chargedCounts[idx],
+          qpStatus,
+          qpQueueOrder,
+          qpQueuedAt,
+          qpSuccessCount,
+          qpDeclinedCount,
+          qpErrorCount,
         };
       }),
     );
@@ -1515,11 +1527,11 @@ const getUserUploadSessions = async (req, res) => {
         sessions: sessionsWithQP.map((s) => ({
           uploadId: s.uploadId,
           fileName: s.fileName,
-          status: s.status,
+          status: s.paymentGateway === "qp" ? s.qpStatus : s.status,
           totalRows: s._totalRows,
           processedRows: s._processedRows,
           progress:
-            s.status === "completed"
+            (s.paymentGateway === "qp" ? s.qpStatus : s.status) === "completed"
               ? 100
               : s._totalRows > 0
                 ? Math.round((s._processedRows / s._totalRows) * 100)
@@ -1529,12 +1541,17 @@ const getUserUploadSessions = async (req, res) => {
           chargedCount: s._chargedCount,
           paymentGateway: s.paymentGateway || "paypal",
           linkedQpChargeFileId: s.linkedQpChargeFileId || null,
+          qpStatus: s.qpStatus,
+          qpQueueOrder: s.qpQueueOrder,
+          qpQueuedAt: s.qpQueuedAt,
+          qpSuccessCount: s.qpSuccessCount,
+          qpDeclinedCount: s.qpDeclinedCount,
+          qpErrorCount: s.qpErrorCount,
           archive: s.archive || false,
           uploadedBy: {
             userId: s.userId._id,
             email: s.userId.email,
-            name:
-              s.userId.name || s.userId.username || "Unknown User",
+            name: s.userId.name || s.userId.username || "Unknown User",
           },
         })),
         pagination: {
@@ -1613,13 +1630,13 @@ const resumeUpload = async (req, res) => {
 
     console.log(
       `Detected payment gateway: ${paymentGateway} based on headers:`,
-      headers
+      headers,
     );
 
     console.log(
       `\x1b[35m🔄 RESUMING UPLOAD: Upload ID ${uploadId} (Retry ${
         uploadSession.retryCount + 1
-      }/${uploadSession.maxRetries}) - ${paymentGateway.toUpperCase()}\x1b[0m`
+      }/${uploadSession.maxRetries}) - ${paymentGateway.toUpperCase()}\x1b[0m`,
     );
 
     // Update session status to processing
@@ -1629,13 +1646,13 @@ const resumeUpload = async (req, res) => {
         status: "processing",
         retryCount: uploadSession.retryCount + 1,
       },
-      { session }
+      { session },
     );
 
     console.log(
       `\x1b[36m📊 RESUME: Processing ${
         totalRows - 1
-      } total rows in batches of ${batchSize}\x1b[0m`
+      } total rows in batches of ${batchSize}\x1b[0m`,
     );
 
     // Choose the appropriate model based on the upload session's payment gateway
@@ -1691,7 +1708,7 @@ const resumeUpload = async (req, res) => {
               }
               const excelEpoch = new Date(1899, 11, 30);
               const date = new Date(
-                excelEpoch.getTime() + serial * 24 * 60 * 60 * 1000
+                excelEpoch.getTime() + serial * 24 * 60 * 60 * 1000,
               );
               const year = date.getFullYear();
               const month = (date.getMonth() + 1).toString().padStart(2, "0");
@@ -1741,7 +1758,7 @@ const resumeUpload = async (req, res) => {
           if (otaFromExcel) {
             try {
               console.log(
-                `Processing OTA from Excel (resume): "${otaFromExcel}"`
+                `Processing OTA from Excel (resume): "${otaFromExcel}"`,
               );
               otaRecord = await OTA.findOne({
                 name: otaFromExcel,
@@ -1751,7 +1768,7 @@ const resumeUpload = async (req, res) => {
               if (otaRecord) {
                 console.log(
                   `Found OTA record for ${otaFromExcel}:`,
-                  otaRecord._id
+                  otaRecord._id,
                 );
               } else {
                 console.log(`No OTA record found for: "${otaFromExcel}"`);
@@ -1809,7 +1826,7 @@ const resumeUpload = async (req, res) => {
           excelDataRecords,
           uploadId,
           batchNumber,
-          paymentGateway
+          paymentGateway,
         );
         totalProcessed += processedCount;
 
@@ -1820,7 +1837,7 @@ const resumeUpload = async (req, res) => {
             status:
               totalProcessed >= totalRows - 1 ? "completed" : "processing",
           },
-          { session }
+          { session },
         );
       }
 
@@ -1838,11 +1855,11 @@ const resumeUpload = async (req, res) => {
         status: "completed",
         completedAt: new Date(),
       },
-      { session }
+      { session },
     );
 
     console.log(
-      `\x1b[32m✅ RESUME COMPLETE: Upload ID ${uploadId} successfully resumed and completed - ${totalProcessed} records processed\x1b[0m`
+      `\x1b[32m✅ RESUME COMPLETE: Upload ID ${uploadId} successfully resumed and completed - ${totalProcessed} records processed\x1b[0m`,
     );
 
     // Delete file from S3
@@ -1865,7 +1882,7 @@ const resumeUpload = async (req, res) => {
     await session.abortTransaction();
 
     console.log(
-      `\x1b[31m❌ RESUME ERROR: Failed to resume upload - Upload ID: ${req.params.uploadId}, Error: ${error.message}\x1b[0m`
+      `\x1b[31m❌ RESUME ERROR: Failed to resume upload - Upload ID: ${req.params.uploadId}, Error: ${error.message}\x1b[0m`,
     );
     console.error("Resume upload error:", error);
 
@@ -1917,7 +1934,7 @@ const cleanupFailedUploads = async (req, res) => {
       } catch (cleanupError) {
         console.error(
           `Error cleaning up session ${session.uploadId}:`,
-          cleanupError
+          cleanupError,
         );
       }
     }
@@ -2033,7 +2050,7 @@ const downloadExcelByUploadId = async (req, res) => {
         "Stripe Refund Update Time",
         "Stripe Refund Invoice ID",
         "Stripe Refund Custom ID",
-        "Stripe Refund Note"
+        "Stripe Refund Note",
       );
     } else {
       // PayPal Payment Fields
@@ -2067,7 +2084,7 @@ const downloadExcelByUploadId = async (req, res) => {
         "PayPal Refund Update Time",
         "PayPal Refund Invoice ID",
         "PayPal Refund Custom ID",
-        "PayPal Refund Note"
+        "PayPal Refund Note",
       );
     }
     // Create Excel workbook and worksheet
@@ -2203,7 +2220,7 @@ const downloadExcelByUploadId = async (req, res) => {
         mimetype:
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       },
-      s3Key
+      s3Key,
     );
     // Return S3 URL in response
     res.status(200).json({
@@ -2389,17 +2406,17 @@ const archiveFile = async (req, res) => {
     // Update all rows for this uploadId to set archive: true
     const updateResult = await DataModel.updateMany(
       { uploadId: uploadId },
-      { $set: { archive: true } }
+      { $set: { archive: true } },
     );
 
     // Update the upload session to set archive: true
     await UploadSession.findOneAndUpdate(
       { uploadId: uploadId },
-      { $set: { archive: true } }
+      { $set: { archive: true } },
     );
 
     console.log(
-      `\x1b[36m📦 ARCHIVED: Upload ID ${uploadId} - ${updateResult.modifiedCount} rows archived (${paymentGateway.toUpperCase()})\x1b[0m`
+      `\x1b[36m📦 ARCHIVED: Upload ID ${uploadId} - ${updateResult.modifiedCount} rows archived (${paymentGateway.toUpperCase()})\x1b[0m`,
     );
 
     res.status(200).json({
@@ -2454,17 +2471,17 @@ const unarchiveFile = async (req, res) => {
     // Update all rows for this uploadId to set archive: false
     const updateResult = await DataModel.updateMany(
       { uploadId: uploadId },
-      { $set: { archive: false } }
+      { $set: { archive: false } },
     );
 
     // Update the upload session to set archive: false
     await UploadSession.findOneAndUpdate(
       { uploadId: uploadId },
-      { $set: { archive: false } }
+      { $set: { archive: false } },
     );
 
     console.log(
-      `\x1b[36m📂 UNARCHIVED: Upload ID ${uploadId} - ${updateResult.modifiedCount} rows unarchived (${paymentGateway.toUpperCase()})\x1b[0m`
+      `\x1b[36m📂 UNARCHIVED: Upload ID ${uploadId} - ${updateResult.modifiedCount} rows unarchived (${paymentGateway.toUpperCase()})\x1b[0m`,
     );
 
     res.status(200).json({
@@ -2499,7 +2516,7 @@ const createExcelData = async (req, res) => {
 
     // Generate unique uploadId for manual entry
     const uploadId = `manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const fileName = `Manual Entry - ${new Date().toISOString().split('T')[0]}`;
+    const fileName = `Manual Entry - ${new Date().toISOString().split("T")[0]}`;
 
     // Normalize Card Expire to YYYY-MM format
     let cardExpire = normalizeCardExpiry(data["Card Expire"]);
@@ -2564,15 +2581,24 @@ const createExcelData = async (req, res) => {
     await newRecord.save();
 
     // Populate OTA data
-    await newRecord.populate("otaId", "name displayName customer billingAddress isActive");
+    await newRecord.populate(
+      "otaId",
+      "name displayName customer billingAddress isActive",
+    );
 
     console.log(
-      `\x1b[32m✅ MANUAL ENTRY CREATED: Record ID ${newRecord._id} (${paymentGateway.toUpperCase()})\x1b[0m`
+      `\x1b[32m✅ MANUAL ENTRY CREATED: Record ID ${newRecord._id} (${paymentGateway.toUpperCase()})\x1b[0m`,
     );
 
     // Prepare response data
-    const { _id, userId: userIdField, __v, createdAt, updatedAt, ...excelData } =
-      newRecord.toObject();
+    const {
+      _id,
+      userId: userIdField,
+      __v,
+      createdAt,
+      updatedAt,
+      ...excelData
+    } = newRecord.toObject();
 
     // Decrypt sensitive card data before returning
     const decryptedData = decryptCardData(excelData);

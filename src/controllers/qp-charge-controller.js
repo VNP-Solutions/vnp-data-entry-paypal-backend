@@ -72,11 +72,7 @@ function cloneMatchForAggregate(match) {
       const v = match[key];
       if (typeof v === "string" && mongoose.Types.ObjectId.isValid(v)) {
         out[key] = new mongoose.Types.ObjectId(v);
-      } else if (
-        v &&
-        typeof v === "object" &&
-        Array.isArray(v.$nin)
-      ) {
+      } else if (v && typeof v === "object" && Array.isArray(v.$nin)) {
         out[key] = {
           $nin: v.$nin.map((id) =>
             id != null && mongoose.Types.ObjectId.isValid(String(id))
@@ -143,7 +139,13 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     ),
     portfolio: getVal("Portfolio", "portfolio"),
 
-    hotel_id: getVal("Hotel ID", "OTA ID", "Expedia ID", "Hotel_ID", "hotel_id"),
+    hotel_id: getVal(
+      "Hotel ID",
+      "OTA ID",
+      "Expedia ID",
+      "Hotel_ID",
+      "hotel_id",
+    ),
     hotel_name: getVal("Hotel Name", "Hotel Name*", "hotel_name"),
     reservation_id: getVal(
       "ReservationID",
@@ -284,7 +286,9 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
   }
 
   // Idempotency key (uses QP username for lookup; same user + reservation + amount + card = same charge)
-  const keyUser = (instance.user_id || instance.hotel_id || "").toString().trim();
+  const keyUser = (instance.user_id || instance.hotel_id || "")
+    .toString()
+    .trim();
   instance.charge_key = crypto
     .createHash("sha256")
     .update(
@@ -412,7 +416,9 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
   const reservationCandidates = [
     ...new Set(
       instancesToInsert
-        .filter((inst) => inst.status !== "INVALID" && inst.status !== "SKIPPED")
+        .filter(
+          (inst) => inst.status !== "INVALID" && inst.status !== "SKIPPED",
+        )
         .map((inst) => String(inst.reservation_id || "").trim())
         .filter(Boolean),
     ),
@@ -423,30 +429,40 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
     const instanceQuery = {
       deleted_at: null,
       reservation_id: { $in: reservationCandidates },
-      status: "SUCCESS"
+      status: "SUCCESS",
     };
 
     const [fromInstances, fromAttempts] = await Promise.all([
-      QPChargeInstance.find(instanceQuery).select("reservation_id parent_file_name").lean(),
+      QPChargeInstance.find(instanceQuery)
+        .select("reservation_id parent_file_name")
+        .lean(),
       QPPaymentAttempt.find({
         "request_payload_redacted.order.order_id": {
           $in: reservationCandidates,
         },
-        result: "SUCCESS"
-      }).select("request_payload_redacted.order.order_id createdAt").lean(),
+        result: "SUCCESS",
+      })
+        .select("request_payload_redacted.order.order_id createdAt")
+        .lean(),
     ]);
-    
+
     for (const inst of fromInstances) {
       const t = String(inst.reservation_id || "").trim();
       if (t && !globalTakenReservationsMap.has(t)) {
-        globalTakenReservationsMap.set(t, { type: 'instance', filename: inst.parent_file_name || 'an existing file' });
+        globalTakenReservationsMap.set(t, {
+          type: "instance",
+          filename: inst.parent_file_name || "an existing file",
+        });
       }
     }
     for (const attempt of fromAttempts) {
       const orderId = attempt.request_payload_redacted?.order?.order_id;
       const t = String(orderId || "").trim();
       if (t && !globalTakenReservationsMap.has(t)) {
-        globalTakenReservationsMap.set(t, { type: 'attempt', date: attempt.createdAt });
+        globalTakenReservationsMap.set(t, {
+          type: "attempt",
+          date: attempt.createdAt,
+        });
       }
     }
   }
@@ -462,14 +478,16 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
     if (globalTakenReservationsMap.has(rid)) {
       const reasonInfo = globalTakenReservationsMap.get(rid);
       inst.status = "SKIPPED";
-      
-      if (reasonInfo.type === 'instance') {
+
+      if (reasonInfo.type === "instance") {
         inst.status_reason = `Reservation ID already exists in file: ${reasonInfo.filename}`;
       } else {
-        const dateStr = reasonInfo.date ? new Date(reasonInfo.date).toLocaleDateString() : 'an earlier date';
+        const dateStr = reasonInfo.date
+          ? new Date(reasonInfo.date).toLocaleDateString()
+          : "an earlier date";
         inst.status_reason = `Payment made on ${dateStr} using reservation ID`;
       }
-      
+
       inst.is_duplicate = true;
       validRows--;
       invalidRows++;
@@ -482,7 +500,10 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
       inst.is_duplicate = true;
       validRows--;
       invalidRows++;
-      skippedRowsForReservationEmail.push({ id: rid, info: { type: 'current_file' } });
+      skippedRowsForReservationEmail.push({
+        id: rid,
+        info: { type: "current_file" },
+      });
       continue;
     }
     seenReservationInFile.add(rid);
@@ -507,48 +528,50 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
         const uniqueSkipped = [];
         const seenIds = new Set();
         for (const item of skippedRowsForReservationEmail) {
-           if (!seenIds.has(item.id)) {
-              seenIds.add(item.id);
-              uniqueSkipped.push(item);
-           }
+          if (!seenIds.has(item.id)) {
+            seenIds.add(item.id);
+            uniqueSkipped.push(item);
+          }
         }
         const n = skippedRowsForReservationEmail.length;
 
         // Group by category
         const groups = {
-           instance: [],
-           attempt: [],
-           current_file: []
+          instance: [],
+          attempt: [],
+          current_file: [],
         };
         for (const item of uniqueSkipped) {
-           groups[item.info.type].push(item);
+          groups[item.info.type].push(item);
         }
 
         let listsHtml = "";
-        
+
         if (groups.instance.length > 0) {
-           listsHtml += `<p style="color: #333; font-size: 15px; font-weight: bold; margin-bottom: 4px;">Reservation ID from existing charge file:</p><ul style="color: #333; font-size: 14px; margin-top: 0;">`;
-           for (const item of groups.instance) {
-              listsHtml += `<li><strong>${escapeHtml(item.id)}</strong> (File: ${escapeHtml(item.info.filename)})</li>`;
-           }
-           listsHtml += `</ul>`;
+          listsHtml += `<p style="color: #333; font-size: 15px; font-weight: bold; margin-bottom: 4px;">Reservation ID from existing charge file:</p><ul style="color: #333; font-size: 14px; margin-top: 0;">`;
+          for (const item of groups.instance) {
+            listsHtml += `<li><strong>${escapeHtml(item.id)}</strong> (File: ${escapeHtml(item.info.filename)})</li>`;
+          }
+          listsHtml += `</ul>`;
         }
-        
+
         if (groups.attempt.length > 0) {
-           listsHtml += `<p style="color: #333; font-size: 15px; font-weight: bold; margin-bottom: 4px;">Payment made previously using reservation ID:</p><ul style="color: #333; font-size: 14px; margin-top: 0;">`;
-           for (const item of groups.attempt) {
-              const dateStr = item.info.date ? new Date(item.info.date).toLocaleDateString() : 'earlier date';
-              listsHtml += `<li><strong>${escapeHtml(item.id)}</strong> (Date: ${escapeHtml(dateStr)})</li>`;
-           }
-           listsHtml += `</ul>`;
+          listsHtml += `<p style="color: #333; font-size: 15px; font-weight: bold; margin-bottom: 4px;">Payment made previously using reservation ID:</p><ul style="color: #333; font-size: 14px; margin-top: 0;">`;
+          for (const item of groups.attempt) {
+            const dateStr = item.info.date
+              ? new Date(item.info.date).toLocaleDateString()
+              : "earlier date";
+            listsHtml += `<li><strong>${escapeHtml(item.id)}</strong> (Date: ${escapeHtml(dateStr)})</li>`;
+          }
+          listsHtml += `</ul>`;
         }
-        
+
         if (groups.current_file.length > 0) {
-           listsHtml += `<p style="color: #333; font-size: 15px; font-weight: bold; margin-bottom: 4px;">Duplicate reservation ID within this uploaded file itself:</p><ul style="color: #333; font-size: 14px; margin-top: 0;">`;
-           for (const item of groups.current_file) {
-              listsHtml += `<li><strong>${escapeHtml(item.id)}</strong></li>`;
-           }
-           listsHtml += `</ul>`;
+          listsHtml += `<p style="color: #333; font-size: 15px; font-weight: bold; margin-bottom: 4px;">Duplicate reservation ID within this uploaded file itself:</p><ul style="color: #333; font-size: 14px; margin-top: 0;">`;
+          for (const item of groups.current_file) {
+            listsHtml += `<li><strong>${escapeHtml(item.id)}</strong></li>`;
+          }
+          listsHtml += `</ul>`;
         }
 
         const subject = "QP charge upload: duplicate reservation IDs skipped";
@@ -573,7 +596,9 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
   return {
     chargeFile,
     skipped_duplicate_reservation_rows: skippedRowsForReservationEmail.length,
-    duplicate_reservation_ids: [...new Set(skippedRowsForReservationEmail.map(item => item.id))].sort(),
+    duplicate_reservation_ids: [
+      ...new Set(skippedRowsForReservationEmail.map((item) => item.id)),
+    ].sort(),
   };
 }
 
@@ -637,7 +662,11 @@ exports.getChargeFiles = catchAsync(async (req, res, next) => {
   const match = { deleted_at: null };
 
   const archivedSessions = await UploadSession.find(
-    { paymentGateway: "qp", archive: true, linkedQpChargeFileId: { $ne: null } },
+    {
+      paymentGateway: "qp",
+      archive: true,
+      linkedQpChargeFileId: { $ne: null },
+    },
     { linkedQpChargeFileId: 1 },
   ).lean();
   const archivedChargeFileIds = archivedSessions
@@ -701,7 +730,11 @@ exports.getChargeInstances = catchAsync(async (req, res, next) => {
 
   // Exclude charge instances from archived files (File History archive = true)
   const archivedSessions = await UploadSession.find(
-    { paymentGateway: "qp", archive: true, linkedQpChargeFileId: { $ne: null } },
+    {
+      paymentGateway: "qp",
+      archive: true,
+      linkedQpChargeFileId: { $ne: null },
+    },
     { linkedQpChargeFileId: 1 },
   ).lean();
   const archivedChargeFileIds = archivedSessions
@@ -737,17 +770,18 @@ exports.getChargeInstances = catchAsync(async (req, res, next) => {
 
   // Text search across hotel_id, reservation_id, user_id (case-insensitive)
   if (search && String(search).trim()) {
-    const term = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const term = String(search)
+      .trim()
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(term, "i");
-    match.$or = [
-      { hotel_id: re },
-      { reservation_id: re },
-      { user_id: re },
-    ];
+    match.$or = [{ hotel_id: re }, { reservation_id: re }, { user_id: re }];
   }
 
   const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
-  const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 20));
+  const limitNum = Math.min(
+    100,
+    Math.max(1, parseInt(String(limit), 10) || 20),
+  );
 
   // Total count from same match as find() so pagination is always correct
   const totalCount = await QPChargeInstance.countDocuments(match);
@@ -954,8 +988,9 @@ exports.updateChargeInstance = catchAsync(async (req, res, next) => {
     "INVALID",
     "SKIPPED",
   ];
-  const canEditPayload =
-    ["PENDING", "INVALID", "DECLINED", "ERROR"].includes(instance.status);
+  const canEditPayload = ["PENDING", "INVALID", "DECLINED", "ERROR"].includes(
+    instance.status,
+  );
 
   const {
     billing_address,
@@ -987,86 +1022,86 @@ exports.updateChargeInstance = catchAsync(async (req, res, next) => {
 
   // Amount, address, expiry: only apply when instance is in editable state
   if (canEditPayload) {
-  // Validate amount_numeric if provided
-  if (amount_numeric !== undefined) {
-    if (typeof amount_numeric !== "number" || amount_numeric <= 0) {
-      return res.status(400).json({
-        status: "error",
-        message: "amount_numeric must be a positive number",
-      });
-    }
-    instance.amount_numeric = amount_numeric;
-  }
-
-  // Validate currency if provided (ISO 4217 3-letter code)
-  if (currency !== undefined) {
-    if (!/^[A-Z]{3}$/.test(currency)) {
-      return res.status(400).json({
-        status: "error",
-        message: "currency must be a 3-letter ISO code (e.g., USD, EUR)",
-      });
-    }
-    instance.currency = currency;
-  }
-
-  // Validate expiry dates if provided
-  if (expiry_month !== undefined) {
-    const month = parseInt(expiry_month, 10);
-    if (isNaN(month) || month < 1 || month > 12) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "expiry_month must be 1-12" });
-    }
-    instance.expiry_month = month;
-  }
-
-  if (expiry_year !== undefined) {
-    const year = parseInt(expiry_year, 10);
-    const currentYear = new Date().getFullYear();
-    if (isNaN(year) || year < currentYear) {
-      return res.status(400).json({
-        status: "error",
-        message: `expiry_year must be ${currentYear} or later`,
-      });
-    }
-    instance.expiry_year = year;
-  }
-
-  // Validate and sanitize billing address if provided
-  if (billing_address) {
-    // Basic XSS prevention: ensure no HTML/script content
-    const sanitizeString = (str) => {
-      if (typeof str !== "string") return str;
-      return str.replace(/[<>\"']/g, ""); // Remove potential HTML chars
-    };
-
-    const sanitizedAddr = {};
-    if (billing_address.address_1)
-      sanitizedAddr.address_1 = sanitizeString(billing_address.address_1);
-    if (billing_address.address_2)
-      sanitizedAddr.address_2 = sanitizeString(billing_address.address_2);
-    if (billing_address.city)
-      sanitizedAddr.city = sanitizeString(billing_address.city);
-    if (billing_address.state)
-      sanitizedAddr.state = sanitizeString(billing_address.state);
-    if (billing_address.postal_code)
-      sanitizedAddr.postal_code = sanitizeString(billing_address.postal_code);
-    if (billing_address.country_code) {
-      // Validate 2-letter country code
-      if (!/^[A-Z]{2}$/.test(billing_address.country_code)) {
+    // Validate amount_numeric if provided
+    if (amount_numeric !== undefined) {
+      if (typeof amount_numeric !== "number" || amount_numeric <= 0) {
         return res.status(400).json({
           status: "error",
-          message: "country_code must be a 2-letter ISO code",
+          message: "amount_numeric must be a positive number",
         });
       }
-      sanitizedAddr.country_code = billing_address.country_code;
+      instance.amount_numeric = amount_numeric;
     }
 
-    instance.billing_address = {
-      ...instance.billing_address,
-      ...sanitizedAddr,
-    };
-  }
+    // Validate currency if provided (ISO 4217 3-letter code)
+    if (currency !== undefined) {
+      if (!/^[A-Z]{3}$/.test(currency)) {
+        return res.status(400).json({
+          status: "error",
+          message: "currency must be a 3-letter ISO code (e.g., USD, EUR)",
+        });
+      }
+      instance.currency = currency;
+    }
+
+    // Validate expiry dates if provided
+    if (expiry_month !== undefined) {
+      const month = parseInt(expiry_month, 10);
+      if (isNaN(month) || month < 1 || month > 12) {
+        return res
+          .status(400)
+          .json({ status: "error", message: "expiry_month must be 1-12" });
+      }
+      instance.expiry_month = month;
+    }
+
+    if (expiry_year !== undefined) {
+      const year = parseInt(expiry_year, 10);
+      const currentYear = new Date().getFullYear();
+      if (isNaN(year) || year < currentYear) {
+        return res.status(400).json({
+          status: "error",
+          message: `expiry_year must be ${currentYear} or later`,
+        });
+      }
+      instance.expiry_year = year;
+    }
+
+    // Validate and sanitize billing address if provided
+    if (billing_address) {
+      // Basic XSS prevention: ensure no HTML/script content
+      const sanitizeString = (str) => {
+        if (typeof str !== "string") return str;
+        return str.replace(/[<>\"']/g, ""); // Remove potential HTML chars
+      };
+
+      const sanitizedAddr = {};
+      if (billing_address.address_1)
+        sanitizedAddr.address_1 = sanitizeString(billing_address.address_1);
+      if (billing_address.address_2)
+        sanitizedAddr.address_2 = sanitizeString(billing_address.address_2);
+      if (billing_address.city)
+        sanitizedAddr.city = sanitizeString(billing_address.city);
+      if (billing_address.state)
+        sanitizedAddr.state = sanitizeString(billing_address.state);
+      if (billing_address.postal_code)
+        sanitizedAddr.postal_code = sanitizeString(billing_address.postal_code);
+      if (billing_address.country_code) {
+        // Validate 2-letter country code
+        if (!/^[A-Z]{2}$/.test(billing_address.country_code)) {
+          return res.status(400).json({
+            status: "error",
+            message: "country_code must be a 2-letter ISO code",
+          });
+        }
+        sanitizedAddr.country_code = billing_address.country_code;
+      }
+
+      instance.billing_address = {
+        ...instance.billing_address,
+        ...sanitizedAddr,
+      };
+    }
   }
 
   instance.updated_by = userId;
@@ -1179,7 +1214,9 @@ exports.exportChargeInstances = catchAsync(async (req, res, next) => {
   if (charge_file_id) match.charge_file_id = charge_file_id;
   if (status) match.status = status;
   if (ids) {
-    const idList = (typeof ids === "string" ? ids.split(",") : Array.isArray(ids) ? ids : [])
+    const idList = (
+      typeof ids === "string" ? ids.split(",") : Array.isArray(ids) ? ids : []
+    )
       .map((id) => String(id).trim())
       .filter(Boolean);
     if (idList.length > 0) match._id = { $in: idList };
@@ -1306,9 +1343,7 @@ exports.processChargeInstance = catchAsync(async (req, res, next) => {
 
 // Random delay 5-10s between bulk charges (avoid rate limits)
 const delayBetweenCharges = () =>
-  new Promise((resolve) =>
-    setTimeout(resolve, 5000 + Math.random() * 5000),
-  );
+  new Promise((resolve) => setTimeout(resolve, 5000 + Math.random() * 5000));
 
 // Build and send QP bulk process completion email (success or failure)
 async function sendQPProcessCompletionEmail({
@@ -1331,10 +1366,13 @@ async function sendQPProcessCompletionEmail({
   let message;
   if (success) {
     const parts = [];
-    if (successCount > 0) parts.push(`<strong>${successCount}</strong> succeeded`);
-    if (declinedCount > 0) parts.push(`<strong>${declinedCount}</strong> declined`);
+    if (successCount > 0)
+      parts.push(`<strong>${successCount}</strong> succeeded`);
+    if (declinedCount > 0)
+      parts.push(`<strong>${declinedCount}</strong> declined`);
     if (errorCount > 0) parts.push(`<strong>${errorCount}</strong> failed`);
-    if (skippedCount > 0) parts.push(`<strong>${skippedCount}</strong> not processed`);
+    if (skippedCount > 0)
+      parts.push(`<strong>${skippedCount}</strong> not processed`);
     const outcomeLine =
       parts.length > 0
         ? `Outcomes: ${parts.join(", ")}.`
@@ -1381,7 +1419,10 @@ exports.processMultipleInstances = catchAsync(async (req, res, next) => {
   if (!firstInstance || firstInstance.deleted_at) {
     return res
       .status(400)
-      .json({ status: "error", message: "At least one instance not found or invalid" });
+      .json({
+        status: "error",
+        message: "At least one instance not found or invalid",
+      });
   }
 
   const chargeFileId = firstInstance.charge_file_id;
@@ -1489,7 +1530,11 @@ async function getOrCreateManualChargeFile(userId) {
 function parseExpiryFromBody(body) {
   let month = body.expiry_month;
   let year = body.expiry_year;
-  if ((month != null && year != null) || (body.expiry_month !== undefined || body.expiry_year !== undefined)) {
+  if (
+    (month != null && year != null) ||
+    body.expiry_month !== undefined ||
+    body.expiry_year !== undefined
+  ) {
     month = month != null ? parseInt(month, 10) : null;
     year = year != null ? parseInt(year, 10) : null;
     if (!isNaN(month) && month >= 1 && month <= 12) {
@@ -1518,21 +1563,34 @@ exports.createAndProcessSingle = catchAsync(async (req, res, next) => {
   const body = req.body || {};
 
   const hotel_id = (body.hotel_id || body.hotelId || "").toString().trim();
-  const reservation_id = (body.reservation_id || body.reservationId || "").toString().trim();
+  const reservation_id = (body.reservation_id || body.reservationId || "")
+    .toString()
+    .trim();
   const amount_numeric = parseFloat(body.amount_numeric ?? body.amount ?? 0);
-  const currency = (body.currency || "USD").toString().toUpperCase().slice(0, 3);
-  const card_number = (body.card_number || body.cardNumber || "").toString().trim().replace(/\s/g, "");
+  const currency = (body.currency || "USD")
+    .toString()
+    .toUpperCase()
+    .slice(0, 3);
+  const card_number = (body.card_number || body.cardNumber || "")
+    .toString()
+    .trim()
+    .replace(/\s/g, "");
   const cvv = (body.cvv || "").toString().trim();
   const billing_address = body.billing_address || body.billingAddress || {};
   const ota = (body.ota || "").toString().trim();
-  const vnp_work_id = (body.vnp_work_id || body.vnpWorkId || "").toString().trim();
+  const vnp_work_id = (body.vnp_work_id || body.vnpWorkId || "")
+    .toString()
+    .trim();
   const portfolio = (body.portfolio || "").toString().trim();
-  const user_id = (body.user_id || body.userId || body.qp_username || "").toString().trim();
+  const user_id = (body.user_id || body.userId || body.qp_username || "")
+    .toString()
+    .trim();
 
   if (!user_id || !reservation_id || !amount_numeric || amount_numeric <= 0) {
     return res.status(400).json({
       status: "error",
-      message: "user_id (QP username), reservation_id, and positive amount_numeric are required",
+      message:
+        "user_id (QP username), reservation_id, and positive amount_numeric are required",
     });
   }
   if (!card_number || card_number.length < 13) {
@@ -1559,7 +1617,8 @@ exports.createAndProcessSingle = catchAsync(async (req, res, next) => {
   if (!expiry_month || expiry_year == null) {
     return res.status(400).json({
       status: "error",
-      message: "card_expire (MM/YY) or expiry_month and expiry_year are required",
+      message:
+        "card_expire (MM/YY) or expiry_month and expiry_year are required",
     });
   }
 
@@ -1587,7 +1646,10 @@ exports.createAndProcessSingle = catchAsync(async (req, res, next) => {
       city: (billing_address.city || "").toString().trim(),
       state: (billing_address.state || "").toString().trim(),
       postal_code: (billing_address.postal_code || "").toString().trim(),
-      country_code: (billing_address.country_code || "US").toString().toUpperCase().slice(0, 2),
+      country_code: (billing_address.country_code || "US")
+        .toString()
+        .toUpperCase()
+        .slice(0, 2),
     },
     card_number: encrypt(card_number),
     card_last4,
@@ -1620,44 +1682,220 @@ exports.processChargeFile = catchAsync(async (req, res, next) => {
   if (!file)
     return res.status(404).json({ status: "error", message: "File not found" });
 
-  const alreadyProcessing = await QPChargeFile.findOne({
-    status: "PROCESSING",
-    deleted_at: null,
-  });
-  if (alreadyProcessing) {
+  // if file is currently processing
+  if (file.status === "PROCESSING") {
     return res.status(409).json({
       status: "error",
-      message:
-        "One file is already being processed. Please wait for it to finish before starting another.",
+      message: "File is already being processed",
+      data: { run_id: file.last_run_id },
     });
   }
 
-  file.status = "PROCESSING";
+  // if file is already queued, return position back
+  if (file.status === "QUEUED") {
+    const position = await QPChargeFile.countDocuments({
+      status: "QUEUED",
+      deleted_at: null,
+      queue_order: { $lt: file.queue_order },
+    });
+    return res.status(200).json({
+      status: "success",
+      message: "File is already queued",
+      data: { position: position + 1 },
+    });
+  }
+
+  // if file was in a completed or failed state then requeue
+  if (
+    ["COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED", "CANCELLED"].includes(
+      file.status,
+    )
+  ) {
+    file.status = "IMPORTED";
+    file.queue_order = null;
+    file.queued_at = null;
+    await file.save();
+  }
+
+  const activeFile = await QPChargeFile.findOne({
+    status: "PROCESSING",
+    deleted_at: null,
+  });
+
   const runId = generateRunId();
-  file.last_run_id = runId;
+
+  if (!activeFile) {
+    file.status = "PROCESSING";
+    file.last_run_id = runId;
+    file.queue_order = null;
+    file.queued_at = null;
+    await file.save();
+
+    TraceLogger.info(
+      "CHARGE_FILE_PROCESS_START",
+      `Started bulk charge run ${runId} for file ${fileId}`,
+      {
+        run_id: runId,
+        actor_user_id: userId,
+        entity_id: fileId,
+      },
+    );
+
+    processBulkRunAsync(file, runId, userId, userEmail).catch((err) =>
+      console.error("Bulk run error", err),
+    );
+
+    return res.status(202).json({
+      status: "success",
+      message:
+        "Processing started in background. You will receive an email when it is done.",
+      data: { run_id: runId, status: "PROCESSING" },
+    });
+  }
+
+  // Enqueue this file
+  const highestQueued = await QPChargeFile.findOne({
+    status: "QUEUED",
+    deleted_at: null,
+  })
+    .sort({ queue_order: -1 })
+    .select("queue_order")
+    .lean();
+
+  const nextQueueOrder =
+    highestQueued && highestQueued.queue_order != null
+      ? highestQueued.queue_order + 1
+      : 1;
+  file.status = "QUEUED";
+  file.queue_order = nextQueueOrder;
+  file.queued_at = new Date();
+  file.last_run_id = null;
   await file.save();
 
-  TraceLogger.info(
-    "CHARGE_FILE_PROCESS_START",
-    `Started bulk charge run ${runId} for file ${fileId}`,
-    {
-      run_id: runId,
-      actor_user_id: userId,
-      entity_id: fileId,
-    },
-  );
-
-  // Execute processing asynchronously in the background so response is immediate
-  processBulkRunAsync(file, runId, userId, userEmail).catch((err) =>
-    console.error("Bulk run error", err),
-  );
-
-  res.status(202).json({
+  return res.status(202).json({
     status: "success",
-    message: "Processing started in background. You will receive an email when it is done.",
-    data: { run_id: runId },
+    message: "File queued for processing",
+    data: { position: nextQueueOrder, status: "QUEUED" },
   });
 });
+
+// Queue management endpoints
+exports.getQueue = catchAsync(async (req, res, next) => {
+  const queue = await QPChargeFile.find({
+    status: { $in: ["PROCESSING", "QUEUED"] },
+    deleted_at: null,
+  })
+    .sort({ status: -1, queue_order: 1, queued_at: 1 })
+    .lean();
+
+  res.status(200).json({ status: "success", data: queue });
+});
+
+exports.updateQueue = catchAsync(async (req, res, next) => {
+  const fileId = req.params.id;
+  const { action } = req.body;
+
+  const file = await QPChargeFile.findById(fileId);
+  if (!file || file.deleted_at) {
+    return res.status(404).json({ status: "error", message: "File not found" });
+  }
+
+  if (file.status !== "QUEUED") {
+    return res
+      .status(400)
+      .json({ status: "error", message: "Only queued files can be reordered" });
+  }
+
+  const queuedFiles = await QPChargeFile.find({
+    status: "QUEUED",
+    deleted_at: null,
+  })
+    .sort({ queue_order: 1, queued_at: 1 })
+    .exec();
+
+  const index = queuedFiles.findIndex((item) => item._id.equals(file._id));
+  if (index === -1) {
+    return res
+      .status(400)
+      .json({ status: "error", message: "File not queued" });
+  }
+
+  if (action === "up" && index > 0) {
+    const prev = queuedFiles[index - 1];
+    const tmp = file.queue_order;
+    file.queue_order = prev.queue_order;
+    prev.queue_order = tmp;
+    await file.save();
+    await prev.save();
+  } else if (action === "down" && index < queuedFiles.length - 1) {
+    const next = queuedFiles[index + 1];
+    const tmp = file.queue_order;
+    file.queue_order = next.queue_order;
+    next.queue_order = tmp;
+    await file.save();
+    await next.save();
+  } else if (action === "top") {
+    file.queue_order = 0;
+    await file.save();
+    await normalizeQueueOrder();
+  } else if (action === "bottom") {
+    const maxOrder = queuedFiles[queuedFiles.length - 1]?.queue_order || 0;
+    file.queue_order = maxOrder + 1;
+    await file.save();
+    await normalizeQueueOrder();
+  } else {
+    return res.status(400).json({ status: "error", message: "Invalid action" });
+  }
+
+  const updated = await QPChargeFile.find({
+    status: "QUEUED",
+    deleted_at: null,
+  })
+    .sort({ queue_order: 1, queued_at: 1 })
+    .lean();
+
+  res.status(200).json({ status: "success", data: updated });
+});
+
+exports.removeFromQueue = catchAsync(async (req, res, next) => {
+  const fileId = req.params.id;
+  const file = await QPChargeFile.findById(fileId);
+  if (!file || file.deleted_at) {
+    return res.status(404).json({ status: "error", message: "File not found" });
+  }
+
+  if (file.status !== "QUEUED") {
+    return res
+      .status(400)
+      .json({ status: "error", message: "Only queued files can be removed" });
+  }
+
+  file.status = "CANCELLED";
+  file.queue_order = null;
+  file.queued_at = null;
+  await file.save();
+
+  await normalizeQueueOrder();
+
+  res
+    .status(200)
+    .json({ status: "success", message: "File removed from queue" });
+});
+
+async function normalizeQueueOrder() {
+  const queuedFiles = await QPChargeFile.find({
+    status: "QUEUED",
+    deleted_at: null,
+  })
+    .sort({ queue_order: 1, queued_at: 1 })
+    .exec();
+
+  for (let i = 0; i < queuedFiles.length; i++) {
+    const q = queuedFiles[i];
+    q.queue_order = i + 1;
+    await q.save();
+  }
+}
 
 async function processBulkRunAsync(file, runId, userId, userEmail) {
   // Fetch pending instances in order
@@ -1830,6 +2068,66 @@ async function processBulkRunAsync(file, runId, userId, userEmail) {
       },
     },
   );
+
+  // Start next queued file automatically
+  try {
+    await processNextQueuedFile(userId, userEmail);
+  } catch (queueErr) {
+    console.error("Failed to start next queued file:", queueErr);
+    TraceLogger.error(
+      "CHARGE_FILE_QUEUE_FAILURE",
+      "Failed to start next queued file",
+      queueErr,
+      {
+        run_id: runId,
+        entity_id: file._id,
+      },
+    );
+  }
+}
+
+// helper: start next queued file from queue
+async function processNextQueuedFile(userId, userEmail) {
+  const nextFile = await QPChargeFile.findOne({
+    status: "QUEUED",
+    deleted_at: null,
+  })
+    .sort({ queue_order: 1, queued_at: 1 })
+    .exec();
+
+  if (!nextFile) {
+    return;
+  }
+
+  const nextRunId = generateRunId();
+  nextFile.status = "PROCESSING";
+  nextFile.last_run_id = nextRunId;
+  nextFile.queue_order = null;
+  nextFile.queued_at = null;
+  await nextFile.save();
+
+  TraceLogger.info(
+    "CHARGE_FILE_QUEUE_START",
+    `Starting queued file ${nextFile._id} as run ${nextRunId}`,
+    {
+      run_id: nextRunId,
+      actor_user_id: userId,
+      entity_id: nextFile._id,
+    },
+  );
+
+  processBulkRunAsync(nextFile, nextRunId, userId, userEmail).catch((err) => {
+    console.error("Queued file bulk run error:", err);
+    TraceLogger.error(
+      "CHARGE_FILE_QUEUE_RUN_ERROR",
+      `Queued file run ${nextRunId} encountered error`,
+      err,
+      {
+        run_id: nextRunId,
+        entity_id: nextFile._id,
+      },
+    );
+  });
 }
 
 // MARK: 8. Download Compiled Excel
@@ -1919,7 +2217,10 @@ exports.downloadReport = catchAsync(async (req, res, next) => {
     },
   );
 
-  const safeName = (file.file_name || "report").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const safeName = (file.file_name || "report").replace(
+    /[^a-zA-Z0-9._-]/g,
+    "_",
+  );
   res.setHeader(
     "Content-Disposition",
     `attachment; filename="qp_report_${safeName}"`,
