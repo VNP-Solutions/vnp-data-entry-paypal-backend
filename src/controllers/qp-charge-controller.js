@@ -408,7 +408,7 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
   }
 
   // Global reservation ID uniqueness: skip rows whose reservation already exists on any
-  // non-deleted instance or appears on any QP payment attempt (order_id in redacted payload).
+  // successful instance or appears on any successful QP payment attempt.
   const reservationCandidates = [
     ...new Set(
       instancesToInsert
@@ -420,21 +420,11 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
 
   const globalTakenReservationsMap = new Map();
   if (reservationCandidates.length > 0) {
-    const archivedSessions = await UploadSession.find(
-      { paymentGateway: "qp", archive: true, linkedQpChargeFileId: { $ne: null } },
-      { linkedQpChargeFileId: 1 },
-    ).lean();
-    const archivedChargeFileIds = archivedSessions
-      .map((s) => s.linkedQpChargeFileId)
-      .filter(Boolean);
-
     const instanceQuery = {
       deleted_at: null,
       reservation_id: { $in: reservationCandidates },
+      status: "SUCCESS"
     };
-    if (archivedChargeFileIds.length > 0) {
-      instanceQuery.charge_file_id = { $nin: archivedChargeFileIds };
-    }
 
     const [fromInstances, fromAttempts] = await Promise.all([
       QPChargeInstance.find(instanceQuery).select("reservation_id parent_file_name").lean(),
@@ -442,6 +432,7 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
         "request_payload_redacted.order.order_id": {
           $in: reservationCandidates,
         },
+        result: "SUCCESS"
       }).select("request_payload_redacted.order.order_id createdAt").lean(),
     ]);
     

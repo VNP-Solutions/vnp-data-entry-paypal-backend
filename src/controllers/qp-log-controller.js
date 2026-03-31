@@ -6,9 +6,13 @@ const catchAsync = (fn) => (req, res, next) => {
 };
 
 // MARK: 1. Get Payment Attempts with filters
-// 1. Get Payment Attempts with date range filtering
+// 1. Get Payment Attempts with date range filtering, pagination and search
 exports.getPaymentAttempts = catchAsync(async (req, res, next) => {
-  const { charge_instance_id, run_id, result, date_from, date_to } = req.query;
+  const { charge_instance_id, run_id, result, date_from, date_to, search } = req.query;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
+
   const match = {};
 
   if (charge_instance_id) match.charge_instance_id = charge_instance_id;
@@ -22,11 +26,47 @@ exports.getPaymentAttempts = catchAsync(async (req, res, next) => {
     if (date_to) match.createdAt.$lte = new Date(date_to);
   }
 
+  // Search logic across technical IDs and related ChargeInstance data
+  if (search) {
+    // Dynamically require QPChargeInstance to avoid circular dependency if any
+    const QPChargeInstance = require("../models/QPChargeInstance");
+    const matchingInstances = await QPChargeInstance.find({
+      $or: [
+        { reservation_id: { $regex: search, $options: "i" } },
+        { hotel_name: { $regex: search, $options: "i" } },
+        { hotel_id: { $regex: search, $options: "i" } }
+      ]
+    }).select("_id");
+    
+    const instanceIds = matchingInstances.map(i => i._id);
+
+    match.$or = [
+      { request_id: { $regex: search, $options: "i" } },
+      { run_id: { $regex: search, $options: "i" } },
+      { charge_instance_id: { $in: instanceIds } }
+    ];
+  }
+
+  const total = await QPPaymentAttempt.countDocuments(match);
   const attempts = await QPPaymentAttempt.find(match)
     .sort({ createdAt: -1 })
-    .populate("created_by", "name email");
+    .skip(skip)
+    .limit(limit)
+    .populate("created_by", "name email")
+    .populate("charge_instance_id", "reservation_id hotel_name hotel_id amount_numeric currency status");
 
-  res.status(200).json({ status: "success", data: attempts });
+  res.status(200).json({ 
+    status: "success", 
+    data: {
+      attempts,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    } 
+  });
 });
 
 // MARK: 2. Get Single Payment Attempt
