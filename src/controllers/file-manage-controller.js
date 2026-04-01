@@ -1506,8 +1506,19 @@ const getUserUploadSessions = async (req, res) => {
             qpErrorCount = qpFile.error_count || 0;
           }
         }
+
+        const qpPendingCount = Math.max(
+          0,
+          (totalRows || 0) -
+            (qpSuccessCount +
+              qpDeclinedCount +
+              qpErrorCount +
+              (session.skipped_count || 0)),
+        );
+
         return {
           ...session.toObject(),
+          qpPendingCount,
           _totalRows: totalRows,
           _processedRows: processedRows,
           _chargedCount: chargedCounts[idx],
@@ -1547,6 +1558,7 @@ const getUserUploadSessions = async (req, res) => {
           qpSuccessCount: s.qpSuccessCount,
           qpDeclinedCount: s.qpDeclinedCount,
           qpErrorCount: s.qpErrorCount,
+          qpPendingCount: s.qpPendingCount || 0,
           archive: s.archive || false,
           uploadedBy: {
             userId: s.userId._id,
