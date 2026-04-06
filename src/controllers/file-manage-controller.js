@@ -34,6 +34,29 @@ function generateUploadId() {
   return `upload_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
+/** Soft-deleted uploads can be restored within this window; then purged permanently. */
+const RESTORE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+function uploadSessionNotDeletedCond() {
+  return {
+    $or: [{ deleted_at: null }, { deleted_at: { $exists: false } }],
+  };
+}
+
+function excelRowNotDeletedCond() {
+  return {
+    $or: [{ deleted_at: null }, { deleted_at: { $exists: false } }],
+  };
+}
+
+function mergeWithActiveUploadSession(query) {
+  const active = uploadSessionNotDeletedCond();
+  if (!query || Object.keys(query).length === 0) {
+    return active;
+  }
+  return { $and: [query, active] };
+}
+
 // Optimized batch processing with better error handling
 async function processBatch(
   excelDataRecords,
@@ -107,9 +130,14 @@ async function processBatch(
 // Check for existing upload session
 async function checkExistingUpload(fileName, userId) {
   const existingSession = await UploadSession.findOne({
-    userId: userId,
-    fileName: fileName,
-    status: { $in: ["uploading", "processing"] },
+    $and: [
+      {
+        userId: userId,
+        fileName: fileName,
+        status: { $in: ["uploading", "processing"] },
+      },
+      uploadSessionNotDeletedCond(),
+    ],
   });
 
   if (existingSession) {
@@ -714,7 +742,10 @@ const getUploadFileSummaries = async (req, res) => {
       query.fileName = { $regex: search.trim(), $options: "i" };
     }
 
-    const sessions = await UploadSession.find(query, "uploadId fileName")
+    const sessions = await UploadSession.find(
+      mergeWithActiveUploadSession(query),
+      "uploadId fileName",
+    )
       .sort({ createdAt: -1 })
       .lean();
 
@@ -783,15 +814,17 @@ const getRowData = async (req, res) => {
       ];
     }
 
+    const finalQuery = { $and: [query, excelRowNotDeletedCond()] };
+
     // Get paginated data for the user with filters
-    const rowData = await DataModel.find(query)
+    const rowData = await DataModel.find(finalQuery)
       .populate("otaId", "name displayName customer billingAddress isActive") // Populate OTA data
       .skip(skip)
       .limit(parseInt(limit))
       .sort({ createdAt: -1 });
 
     // Get total count for pagination with same filters
-    const totalCount = await DataModel.countDocuments(query);
+    const totalCount = await DataModel.countDocuments(finalQuery);
 
     res.status(200).json({
       status: "success",
@@ -871,15 +904,17 @@ const getStripeRowData = async (req, res) => {
       ];
     }
 
+    const finalStripeQuery = { $and: [query, excelRowNotDeletedCond()] };
+
     // Get paginated data for the user with filters
-    const rowData = await DataModel.find(query)
+    const rowData = await DataModel.find(finalStripeQuery)
       .populate("otaId", "name displayName customer billingAddress isActive") // Populate OTA data
       .skip(skip)
       .limit(parseInt(limit))
       .sort({ createdAt: -1 });
 
     // Get total count for pagination with same filters
-    const totalCount = await DataModel.countDocuments(query);
+    const totalCount = await DataModel.countDocuments(finalStripeQuery);
 
     res.status(200).json({
       status: "success",
@@ -1092,10 +1127,16 @@ const getUserFiles = async (req, res) => {
     const userId = req.user.userId;
 
     // Get total count of records for the user
-    const totalCount = await ExcelData.countDocuments({ userId: userId });
+    const totalCount = await ExcelData.countDocuments({
+      userId: userId,
+      ...excelRowNotDeletedCond(),
+    });
 
     // Get recent data (last 10 records)
-    const recentData = await ExcelData.find({ userId: userId })
+    const recentData = await ExcelData.find({
+      userId: userId,
+      ...excelRowNotDeletedCond(),
+    })
       .populate("otaId", "name displayName customer billingAddress isActive") // Populate OTA data
       .sort({ createdAt: -1 })
       .limit(10);
@@ -1187,28 +1228,83 @@ const deleteFile = async (req, res) => {
   }
 };
 
-// Delete entire upload and all associated data
+/**
+ * Permanent removal (S3 + DB). Used after soft-delete retention expires.
+ * Expects a plain session object with uploadId, paymentGateway, linkedQpChargeFileId, s3Key, originalFileName.
+ */
+async function hardDeleteUploadPermanently(uploadSessionDoc) {
+  const uploadId = uploadSessionDoc.uploadId;
+  const paymentGateway = uploadSessionDoc.paymentGateway || "paypal";
+  const s3Key = uploadSessionDoc.s3Key;
+  const originalFileName = uploadSessionDoc.originalFileName;
+
+  const mongoSession = await mongoose.startSession();
+  mongoSession.startTransaction();
+  try {
+    if (paymentGateway === "qp" && uploadSessionDoc.linkedQpChargeFileId) {
+      const cfId = uploadSessionDoc.linkedQpChargeFileId;
+      await QPChargeInstance.deleteMany(
+        { charge_file_id: cfId },
+        { session: mongoSession },
+      );
+      await QPChargeFile.deleteOne({ _id: cfId }, { session: mongoSession });
+    } else {
+      const DataModel =
+        paymentGateway === "stripe" ? StripeExcelData : ExcelData;
+      await DataModel.deleteMany({ uploadId }, { session: mongoSession });
+      const OtherModel =
+        paymentGateway === "stripe" ? ExcelData : StripeExcelData;
+      await OtherModel.deleteMany({ uploadId }, { session: mongoSession });
+    }
+    await UploadSession.deleteOne({ uploadId }, { session: mongoSession });
+    await mongoSession.commitTransaction();
+  } catch (err) {
+    await mongoSession.abortTransaction();
+    throw err;
+  } finally {
+    mongoSession.endSession();
+  }
+
+  if (s3Key) {
+    try {
+      await s3Service.deleteFile(s3Key);
+    } catch (s3Error) {
+      console.log(`S3 purge ${s3Key}: ${s3Error.message}`);
+    }
+  }
+  try {
+    await s3Service.deleteFile(`exports/${uploadId}/${originalFileName}`);
+  } catch (s3Error) {
+    console.log(`S3 export purge: ${s3Error.message}`);
+  }
+}
+
+// Soft-delete upload (90-day restore window); S3 kept until permanent purge
 const deleteUploadById = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  const mongoSession = await mongoose.startSession();
+  mongoSession.startTransaction();
 
   try {
     const { uploadId } = req.params;
     const userId = req.user.userId;
+    const now = new Date();
 
     if (!uploadId) {
+      await mongoSession.abortTransaction();
+      mongoSession.endSession();
       return res.status(400).json({
         status: "error",
         message: "Upload ID is required",
       });
     }
 
-    // First, verify that the upload session belongs to the user
     const uploadSession = await UploadSession.findOne({
-      uploadId: uploadId,
-    });
+      $and: [{ uploadId }, uploadSessionNotDeletedCond()],
+    }).session(mongoSession);
 
     if (!uploadSession) {
+      await mongoSession.abortTransaction();
+      mongoSession.endSession();
       return res.status(404).json({
         status: "error",
         message: "Upload session not found or access denied",
@@ -1217,103 +1313,66 @@ const deleteUploadById = async (req, res) => {
 
     const paymentGateway = uploadSession.paymentGateway || "paypal";
     let recordCount = 0;
-    let excelDataDeleteResult = { deletedCount: 0 };
 
     if (paymentGateway === "qp" && uploadSession.linkedQpChargeFileId) {
-      // QP session: soft-delete the linked QP charge file and its instances
       const qpFile = await QPChargeFile.findById(
         uploadSession.linkedQpChargeFileId,
-      ).session(session);
+      ).session(mongoSession);
       if (qpFile) {
         recordCount = qpFile.total_rows || 0;
-        qpFile.deleted_at = new Date();
-        qpFile.deleted_by = req.user?.userId;
-        await qpFile.save({ session });
+        qpFile.deleted_at = now;
+        qpFile.deleted_by = userId;
+        await qpFile.save({ session: mongoSession });
         await QPChargeInstance.updateMany(
           { charge_file_id: qpFile._id },
           {
             $set: {
-              deleted_at: new Date(),
-              deleted_by: req.user?.userId,
+              deleted_at: now,
+              deleted_by: userId,
             },
           },
-          { session },
+          { session: mongoSession },
         );
-        excelDataDeleteResult = { deletedCount: recordCount };
       }
       console.log(
-        `\x1b[36m🗑️  Deleting QP upload: Upload ID ${uploadId}, linked QPChargeFile ${uploadSession.linkedQpChargeFileId}\x1b[0m`,
+        `\x1b[36m🗑️  Soft-delete QP upload: Upload ID ${uploadId}, linked QPChargeFile ${uploadSession.linkedQpChargeFileId}\x1b[0m`,
       );
     } else {
       const DataModel =
         paymentGateway === "stripe" ? StripeExcelData : ExcelData;
-      recordCount = await DataModel.countDocuments({
-        uploadId: uploadId,
-      });
+      recordCount = await DataModel.countDocuments({ uploadId });
       console.log(
-        `\x1b[36m🗑️  Deleting upload: Upload ID ${uploadId} with ${recordCount} records (${paymentGateway.toUpperCase()})\x1b[0m`,
+        `\x1b[36m🗑️  Soft-delete upload: Upload ID ${uploadId} with ${recordCount} records (${paymentGateway.toUpperCase()})\x1b[0m`,
       );
-      excelDataDeleteResult = await DataModel.deleteMany(
-        { uploadId: uploadId },
-        { session },
-      );
-    }
-
-    console.log(
-      `\x1b[32m✅ DELETE SUCCESS: Removed ${excelDataDeleteResult.deletedCount}/${recordCount} records from database\x1b[0m`,
-    );
-
-    // Delete the upload session
-    const sessionDeleteResult = await UploadSession.findOneAndDelete(
-      {
-        uploadId: uploadId,
-      },
-      { session },
-    );
-
-    if (sessionDeleteResult) {
-      console.log(
-        `\x1b[32m✅ DELETE SUCCESS: Upload session removed - File: ${sessionDeleteResult.fileName}\x1b[0m`,
+      await DataModel.updateMany(
+        { uploadId },
+        { $set: { deleted_at: now, deleted_by: userId } },
+        { session: mongoSession },
       );
     }
 
-    // Try to clean up any remaining S3 files (for failed uploads or exports)
-    if (uploadSession.s3Key) {
-      try {
-        await s3Service.deleteFile(uploadSession.s3Key);
-      } catch (s3Error) {
-        console.log(
-          `S3 file cleanup for ${uploadSession.s3Key}: ${s3Error.message}`,
-        );
-        // Don't fail the entire operation if S3 cleanup fails
-      }
-    }
+    uploadSession.deleted_at = now;
+    uploadSession.deleted_by = userId;
+    await uploadSession.save({ session: mongoSession });
 
-    // Also try to delete any export files for this upload
-    try {
-      const exportKey = `exports/${uploadId}/${uploadSession.originalFileName}`;
-      await s3Service.deleteFile(exportKey);
-    } catch (s3Error) {
-      console.log(`S3 export file cleanup: ${s3Error.message}`);
-      // Don't fail the entire operation if S3 cleanup fails
-    }
-
-    // Commit the transaction
-    await session.commitTransaction();
+    await mongoSession.commitTransaction();
+    mongoSession.endSession();
 
     res.status(200).json({
       status: "success",
-      message: "Upload and all associated data deleted successfully",
+      message:
+        "File moved to trash. You can restore it within 90 days from Deleted files.",
       data: {
-        uploadId: uploadId,
+        uploadId,
         fileName: uploadSession.fileName,
-        deletedRecords: excelDataDeleteResult.deletedCount,
-        expectedRecords: recordCount,
+        movedToTrash: true,
+        rowsAffected: recordCount,
+        restoreRetentionDays: RESTORE_RETENTION_MS / (24 * 60 * 60 * 1000),
       },
     });
   } catch (error) {
-    // Rollback transaction on error
-    await session.abortTransaction();
+    await mongoSession.abortTransaction();
+    mongoSession.endSession();
 
     console.log(
       `\x1b[31m❌ DELETE UPLOAD ERROR: Failed to delete upload - Upload ID: ${req.params.uploadId}, Error: ${error.message}\x1b[0m`,
@@ -1324,8 +1383,208 @@ const deleteUploadById = async (req, res) => {
       message: "Error deleting upload",
       error: error.message,
     });
-  } finally {
-    session.endSession();
+  }
+};
+
+// Deleted uploads still within restore window (same visibility as File History list)
+const getTrashedUploadSessions = async (req, res) => {
+  try {
+    const { limit = 20, page = 1, search, gateway } = req.query;
+    const retentionCutoff = new Date(Date.now() - RESTORE_RETENTION_MS);
+
+    const query = {
+      deleted_at: { $ne: null, $gte: retentionCutoff },
+    };
+
+    if (gateway && typeof gateway === "string") {
+      const gateways = gateway
+        .split(",")
+        .map((g) => g.trim().toLowerCase())
+        .filter(Boolean);
+      if (gateways.length) {
+        query.paymentGateway = { $in: gateways };
+      }
+    }
+
+    if (search && search.trim() !== "") {
+      query.fileName = { $regex: search.trim(), $options: "i" };
+    }
+
+    const sessions = await UploadSession.find(query)
+      .populate("userId", "email name username")
+      .sort({ deleted_at: -1 })
+      .limit(parseInt(limit))
+      .skip((parseInt(page) - 1) * parseInt(limit))
+      .lean();
+
+    const total = await UploadSession.countDocuments(query);
+
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const data = sessions.map((s) => {
+      const deletedAt = s.deleted_at ? new Date(s.deleted_at) : null;
+      const purgeAt = deletedAt
+        ? new Date(deletedAt.getTime() + RESTORE_RETENTION_MS)
+        : null;
+      const daysRemaining = purgeAt
+        ? Math.max(0, Math.ceil((purgeAt.getTime() - Date.now()) / msPerDay))
+        : 0;
+      return {
+        uploadId: s.uploadId,
+        fileName: s.fileName,
+        paymentGateway: s.paymentGateway || "paypal",
+        deletedAt: s.deleted_at,
+        purgeEligibleAt: purgeAt,
+        daysRemaining,
+        linkedQpChargeFileId: s.linkedQpChargeFileId || null,
+      };
+    });
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        sessions: data,
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Error listing trashed uploads:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Error listing deleted uploads",
+      error: error.message,
+    });
+  }
+};
+
+const restoreUploadById = async (req, res) => {
+  const mongoSession = await mongoose.startSession();
+  mongoSession.startTransaction();
+
+  try {
+    const { uploadId } = req.params;
+
+    if (!uploadId) {
+      await mongoSession.abortTransaction();
+      mongoSession.endSession();
+      return res.status(400).json({
+        status: "error",
+        message: "Upload ID is required",
+      });
+    }
+
+    const uploadSession = await UploadSession.findOne({ uploadId }).session(
+      mongoSession,
+    );
+
+    if (!uploadSession || !uploadSession.deleted_at) {
+      await mongoSession.abortTransaction();
+      mongoSession.endSession();
+      return res.status(404).json({
+        status: "error",
+        message: "Deleted upload not found",
+      });
+    }
+
+    const retentionCutoff = Date.now() - RESTORE_RETENTION_MS;
+    if (uploadSession.deleted_at.getTime() < retentionCutoff) {
+      await mongoSession.abortTransaction();
+      mongoSession.endSession();
+      return res.status(410).json({
+        status: "error",
+        message:
+          "Restore window has expired (90 days). The upload may have been permanently removed.",
+      });
+    }
+
+    uploadSession.deleted_at = null;
+    uploadSession.deleted_by = null;
+    await uploadSession.save({ session: mongoSession });
+
+    const paymentGateway = uploadSession.paymentGateway || "paypal";
+    if (paymentGateway === "qp" && uploadSession.linkedQpChargeFileId) {
+      await QPChargeFile.updateOne(
+        { _id: uploadSession.linkedQpChargeFileId },
+        { $set: { deleted_at: null, deleted_by: null } },
+        { session: mongoSession },
+      );
+      await QPChargeInstance.updateMany(
+        { charge_file_id: uploadSession.linkedQpChargeFileId },
+        { $set: { deleted_at: null, deleted_by: null } },
+        { session: mongoSession },
+      );
+    } else {
+      const DataModel =
+        paymentGateway === "stripe" ? StripeExcelData : ExcelData;
+      await DataModel.updateMany(
+        { uploadId },
+        { $set: { deleted_at: null, deleted_by: null } },
+        { session: mongoSession },
+      );
+    }
+
+    await mongoSession.commitTransaction();
+    mongoSession.endSession();
+
+    res.status(200).json({
+      status: "success",
+      message: "Upload restored successfully",
+      data: { uploadId, fileName: uploadSession.fileName },
+    });
+  } catch (error) {
+    await mongoSession.abortTransaction();
+    mongoSession.endSession();
+    console.error("Restore upload error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Error restoring upload",
+      error: error.message,
+    });
+  }
+};
+
+/** Permanently remove soft-deleted uploads past retention. Secured via UPLOAD_PURGE_SECRET header. */
+const purgeExpiredDeletedUploads = async (req, res) => {
+  try {
+    const expected = process.env.UPLOAD_PURGE_SECRET;
+    if (!expected || req.headers["x-upload-purge-secret"] !== expected) {
+      return res.status(403).json({
+        status: "error",
+        message: "Purge not authorized (set UPLOAD_PURGE_SECRET and x-upload-purge-secret header)",
+      });
+    }
+
+    const retentionCutoff = new Date(Date.now() - RESTORE_RETENTION_MS);
+    const expired = await UploadSession.find({
+      deleted_at: { $ne: null, $lt: retentionCutoff },
+    }).lean();
+
+    let purged = 0;
+    for (const doc of expired) {
+      try {
+        await hardDeleteUploadPermanently(doc);
+        purged += 1;
+      } catch (e) {
+        console.error(`Purge failed for ${doc.uploadId}:`, e.message);
+      }
+    }
+
+    res.status(200).json({
+      status: "success",
+      message: `Purged ${purged} expired upload(s)`,
+      data: { purgedCount: purged, candidates: expired.length },
+    });
+  } catch (error) {
+    console.error("Purge error:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Error purging uploads",
+      error: error.message,
+    });
   }
 };
 
@@ -1449,13 +1708,14 @@ const getUserUploadSessions = async (req, res) => {
       const searchRegex = { $regex: search, $options: "i" }; // Case-insensitive search
       query.$or = [{ fileName: searchRegex }];
     }
-    const sessions = await UploadSession.find(query)
+    const sessionQuery = mergeWithActiveUploadSession(query);
+    const sessions = await UploadSession.find(sessionQuery)
       .populate("userId", "email name username") // Populate user information
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
       .skip((parseInt(page) - 1) * parseInt(limit));
 
-    const total = await UploadSession.countDocuments(query);
+    const total = await UploadSession.countDocuments(sessionQuery);
 
     // MARK: Charge count per session – QP: SUCCESS+DECLINED instances; PayPal/Stripe: Charged count
     const chargedCounts = await Promise.all(
@@ -1474,6 +1734,7 @@ const getUserUploadSessions = async (req, res) => {
         return await DataModel.countDocuments({
           uploadId: session.uploadId,
           "Charge status": "Charged",
+          ...excelRowNotDeletedCond(),
         });
       }),
     );
@@ -1490,35 +1751,53 @@ const getUserUploadSessions = async (req, res) => {
         let qpSuccessCount = 0;
         let qpDeclinedCount = 0;
         let qpErrorCount = 0;
+        let qpSkippedCount = 0;
+        let qpPendingCount = 0;
+        let qpInvalidCount = 0;
+        let qpBulkLastActivityAt = null;
 
         if (paymentGateway === "qp" && session.linkedQpChargeFileId) {
-          const qpFile = await QPChargeFile.findById(
-            session.linkedQpChargeFileId,
-          ).lean();
+          const cfId = session.linkedQpChargeFileId;
+          const qpFile = await QPChargeFile.findById(cfId).lean();
           if (qpFile) {
             totalRows = qpFile.total_rows || 0;
             processedRows = qpFile.processed_rows || 0;
             qpStatus = qpFile.status || session.status;
+            qpBulkLastActivityAt = qpFile.bulk_last_activity_at || null;
             qpQueueOrder = qpFile.queue_order || null;
             qpQueuedAt = qpFile.queued_at || null;
             qpSuccessCount = qpFile.success_count || 0;
             qpDeclinedCount = qpFile.declined_count || 0;
             qpErrorCount = qpFile.error_count || 0;
+            // SKIPPED / PENDING / INVALID from instances — file.skipped_count is not always maintained on import
+            const [pendingC, skippedC, invalidC] = await Promise.all([
+              QPChargeInstance.countDocuments({
+                charge_file_id: cfId,
+                status: "PENDING",
+                deleted_at: null,
+              }),
+              QPChargeInstance.countDocuments({
+                charge_file_id: cfId,
+                status: "SKIPPED",
+                deleted_at: null,
+              }),
+              QPChargeInstance.countDocuments({
+                charge_file_id: cfId,
+                status: "INVALID",
+                deleted_at: null,
+              }),
+            ]);
+            qpPendingCount = pendingC;
+            qpSkippedCount = skippedC;
+            qpInvalidCount = invalidC;
           }
         }
-
-        const qpPendingCount = Math.max(
-          0,
-          (totalRows || 0) -
-            (qpSuccessCount +
-              qpDeclinedCount +
-              qpErrorCount +
-              (session.skipped_count || 0)),
-        );
 
         return {
           ...session.toObject(),
           qpPendingCount,
+          qpSkippedCount,
+          qpInvalidCount,
           _totalRows: totalRows,
           _processedRows: processedRows,
           _chargedCount: chargedCounts[idx],
@@ -1528,6 +1807,7 @@ const getUserUploadSessions = async (req, res) => {
           qpSuccessCount,
           qpDeclinedCount,
           qpErrorCount,
+          qpBulkLastActivityAt,
         };
       }),
     );
@@ -1559,6 +1839,9 @@ const getUserUploadSessions = async (req, res) => {
           qpDeclinedCount: s.qpDeclinedCount,
           qpErrorCount: s.qpErrorCount,
           qpPendingCount: s.qpPendingCount || 0,
+          qpSkippedCount: s.qpSkippedCount || 0,
+          qpInvalidCount: s.qpInvalidCount || 0,
+          qpBulkLastActivityAt: s.qpBulkLastActivityAt || null,
           archive: s.archive || false,
           uploadedBy: {
             userId: s.userId._id,
@@ -1594,9 +1877,14 @@ const resumeUpload = async (req, res) => {
     const userId = req.user.userId;
 
     const uploadSession = await UploadSession.findOne({
-      uploadId: uploadId,
-      userId: userId,
-      status: "failed",
+      $and: [
+        {
+          uploadId: uploadId,
+          userId: userId,
+          status: "failed",
+        },
+        uploadSessionNotDeletedCond(),
+      ],
     });
 
     if (!uploadSession) {
@@ -2286,11 +2574,14 @@ const getTransactionHistory = async (req, res) => {
     let paypalData = [];
     let stripeData = [];
 
+    const rowHistoryQuery = {
+      $and: [{ ...baseQuery, ...searchQuery }, excelRowNotDeletedCond()],
+    };
+
     // Fetch data based on filter
     if (filter === "All" || filter === "PayPal" || !filter) {
       // Get PayPal data
-      const paypalQuery = { ...baseQuery, ...searchQuery };
-      paypalData = await ExcelData.find(paypalQuery)
+      paypalData = await ExcelData.find(rowHistoryQuery)
         .populate("userId", "name email")
         .populate("otaId", "name")
         .sort({ updatedAt: -1 });
@@ -2298,8 +2589,7 @@ const getTransactionHistory = async (req, res) => {
 
     if (filter === "All" || filter === "Stripe" || !filter) {
       // Get Stripe data
-      const stripeQuery = { ...baseQuery, ...searchQuery };
-      stripeData = await StripeExcelData.find(stripeQuery)
+      stripeData = await StripeExcelData.find(rowHistoryQuery)
         .populate("userId", "name email")
         .populate("otaId", "name")
         .sort({ updatedAt: -1 });
@@ -2399,9 +2689,9 @@ const archiveFile = async (req, res) => {
       });
     }
 
-    // Find the upload session to determine payment gateway
+    // Find the upload session to determine payment gateway (active only)
     const uploadSession = await UploadSession.findOne({
-      uploadId: uploadId,
+      $and: [{ uploadId }, uploadSessionNotDeletedCond()],
     });
 
     if (!uploadSession) {
@@ -2464,9 +2754,9 @@ const unarchiveFile = async (req, res) => {
       });
     }
 
-    // Find the upload session to determine payment gateway
+    // Find the upload session to determine payment gateway (active only)
     const uploadSession = await UploadSession.findOne({
-      uploadId: uploadId,
+      $and: [{ uploadId }, uploadSessionNotDeletedCond()],
     });
 
     if (!uploadSession) {
@@ -2644,7 +2934,10 @@ const getManualExcelData = async (req, res) => {
 
     // Build query object - filter for manual entries only (across all users)
     const query = {
-      uploadId: { $regex: "^manual_", $options: "i" }, // Match uploadId starting with "manual_"
+      $and: [
+        { uploadId: { $regex: "^manual_", $options: "i" } },
+        excelRowNotDeletedCond(),
+      ],
     };
 
     // Get all manual entries
@@ -2690,6 +2983,9 @@ module.exports = {
   getUserFiles,
   deleteFile,
   deleteUploadById,
+  getTrashedUploadSessions,
+  restoreUploadById,
+  purgeExpiredDeletedUploads,
   getFileHeaders,
   getUploadStatus,
   getUploadFileSummaries,

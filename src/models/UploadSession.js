@@ -97,6 +97,15 @@ const uploadSessionSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    deleted_at: {
+      type: Date,
+      default: null,
+    },
+    deleted_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -105,5 +114,7 @@ const uploadSessionSchema = new mongoose.Schema(
 
 // Indexes
 uploadSessionSchema.index({ userId: 1, status: 1 });
+uploadSessionSchema.index({ deleted_at: 1 });
+uploadSessionSchema.index({ userId: 1, deleted_at: 1 });
 
 module.exports = mongoose.model("UploadSession", uploadSessionSchema);

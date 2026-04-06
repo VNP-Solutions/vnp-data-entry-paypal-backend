@@ -42,6 +42,7 @@ const fs = require("fs-extra");
 const mongoose = require("mongoose");
 
 const QPChargeFile = require("../models/QPChargeFile");
+const QPQueueSettings = require("../models/QPQueueSettings");
 const QPChargeInstance = require("../models/QPChargeInstance");
 const QPPaymentAttempt = require("../models/QPPaymentAttempt");
 const UploadSession = require("../models/UploadSession");
@@ -334,6 +335,70 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
   return instance;
 };
 
+/** Normalized header for matching CVV column (same idea as mapRowToInstance getVal). */
+function normalizeQpHeader(str) {
+  return String(str || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * Locate the CVV column on the first header row of the sheet.
+ * Uses strict names so we do not pick Stripe/PayPal CVV columns.
+ */
+function findQpCvvColumnIndex(sheet) {
+  if (!sheet || !sheet["!ref"]) return -1;
+  const range = xlsx.utils.decode_range(sheet["!ref"]);
+  const headerRow = range.s.r;
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const addr = xlsx.utils.encode_cell({ r: headerRow, c });
+    const cell = sheet[addr];
+    if (!cell) continue;
+    const text = String(
+      cell.w != null && String(cell.w).trim() !== ""
+        ? cell.w
+        : cell.v != null
+          ? cell.v
+          : "",
+    ).trim();
+    if (!text) continue;
+    const norm = normalizeQpHeader(text);
+    if (norm === "cardcvv" || norm === "cvv") return c;
+  }
+  return -1;
+}
+
+function findCvvPropertyKey(row) {
+  for (const k of Object.keys(row)) {
+    if (k === "__rowNum__") continue;
+    const n = normalizeQpHeader(k);
+    if (n === "cardcvv" || n === "cvv") return k;
+  }
+  return null;
+}
+
+/**
+ * sheet_to_json uses raw numeric cell values, so a displayed CVV like "030" becomes 30.
+ * Re-read the same cell with format_cell / w so Excel display format (e.g. "000") or text is kept.
+ * If the workbook only stores the number 30 with General format, the true value is already lost.
+ */
+function overlayQpCvvFromFormattedCell(row, sheet, cvvColIndex) {
+  if (cvvColIndex < 0 || row == null) return;
+  const rowNum = row.__rowNum__;
+  if (rowNum == null) return;
+  const addr = xlsx.utils.encode_cell({ r: rowNum, c: cvvColIndex });
+  const cell = sheet[addr];
+  if (!cell) return;
+  const formatted = String(
+    xlsx.utils.format_cell(cell, cell.v, {}),
+  ).trim();
+  if (!formatted) return;
+  const digits = formatted.replace(/\D/g, "");
+  if (digits.length < 3 || digits.length > 4) return;
+  const key = findCvvPropertyKey(row) || "Card CVV";
+  row[key] = digits;
+}
+
 // MARK: 1. Import Charging Sheet (shared logic from path)
 // Import QP charge file from a local file path. Used by both the API handler and the unified upload flow.
 async function importChargeFileFromPath(filePath, userId, originalFileName) {
@@ -346,9 +411,16 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
     created_by: userId,
   });
 
-  const workbook = xlsx.readFile(filePath);
+  // CSV/DSV: SheetJS otherwise parses numeric-looking fields as numbers (t:'n'), which drops
+  // leading zeros (e.g. 030 → 30). raw:true keeps each field as text (t:'s'), like Excel Text /
+  // Power Query typing. Do not use for .xlsx; binary parsing uses opts.raw differently.
+  const workbook = isXlsx
+    ? xlsx.readFile(filePath)
+    : xlsx.readFile(filePath, { raw: true });
   const sheetName = workbook.SheetNames[0];
-  const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
+  const sheet = workbook.Sheets[sheetName];
+  const cvvColIndex = findQpCvvColumnIndex(sheet);
+  const rows = xlsx.utils.sheet_to_json(sheet, {
     defval: "",
   });
 
@@ -360,6 +432,7 @@ async function importChargeFileFromPath(filePath, userId, originalFileName) {
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
+    overlayQpCvvFromFormattedCell(row, sheet, cvvColIndex);
     const instance = mapRowToInstance(
       row,
       chargeFile._id,
@@ -959,6 +1032,36 @@ exports.exportRawInstances = catchAsync(async (req, res, next) => {
 // MARK: 5c. Get Single Charge Instance
 // 5c. Get Single Charge Instance
 exports.getChargeInstanceById = catchAsync(async (req, res, next) => {
+  const reqId = generateRequestId();
+  const userId = req.user?.userId;
+  const includeSensitive =
+    req.query.include_sensitive === "true" ||
+    req.query.include_sensitive === "1";
+
+  if (includeSensitive) {
+    const instance = await QPChargeInstance.findById(req.params.id);
+    if (!instance || instance.deleted_at) {
+      return res.status(404).json({ status: "error", message: "Not found" });
+    }
+    const o = instance.toObject();
+    const pan = o.card_number ? decrypt(o.card_number) : null;
+    const cvvPlain = o.cvv ? decrypt(o.cvv) : null;
+    delete o.card_number;
+    delete o.cvv;
+    o.card_number = pan;
+    o.cvv = cvvPlain;
+    TraceLogger.info(
+      "QP_CHARGE_VIEW_SENSITIVE",
+      "Decrypted card fields returned for QP charge instance",
+      {
+        request_id: reqId,
+        actor_user_id: userId,
+        entity_id: String(req.params.id),
+      },
+    );
+    return res.status(200).json({ status: "success", data: o });
+  }
+
   const instance = await QPChargeInstance.findById(req.params.id).select(
     "-card_number -cvv",
   );
@@ -1253,6 +1356,38 @@ exports.exportChargeInstances = catchAsync(async (req, res, next) => {
 const { processCharge } = require("../services/quantumpay-service");
 const TerminalCredential = require("../models/TerminalCredential");
 // { generateRunId } is already imported on line 10 as generateRequestId, need to add it there instead
+
+const QP_QUEUE_SETTINGS_ID = "global";
+/** Default staleness window for recover-stalled without ?force=true */
+const BULK_STALL_MS = 15 * 60 * 1000;
+
+async function getGloballyPaused() {
+  const doc = await QPQueueSettings.findById(QP_QUEUE_SETTINGS_ID).lean();
+  return !!(doc && doc.globally_paused);
+}
+
+async function setGloballyPaused(value) {
+  await QPQueueSettings.findByIdAndUpdate(
+    QP_QUEUE_SETTINGS_ID,
+    { $set: { globally_paused: !!value, updated_at: new Date() } },
+    { upsert: true },
+  );
+}
+
+async function touchBulkActivity(fileId) {
+  await QPChargeFile.findByIdAndUpdate(fileId, {
+    bulk_last_activity_at: new Date(),
+  });
+}
+
+/** Increment file counters after one row finishes charging (avoids end-of-run batch double-count). */
+async function incrementFileChargeOutcome(fileId, terminalStatus) {
+  const inc = { processed_rows: 1 };
+  if (terminalStatus === "SUCCESS") inc.success_count = 1;
+  else if (terminalStatus === "DECLINED") inc.declined_count = 1;
+  else inc.error_count = 1;
+  await QPChargeFile.findByIdAndUpdate(fileId, { $inc: inc });
+}
 
 // helper used by both single and multiple processors
 async function chargeInstance(instance, userId, runId = null) {
@@ -1729,6 +1864,8 @@ exports.processChargeFile = catchAsync(async (req, res, next) => {
     file.last_run_id = runId;
     file.queue_order = null;
     file.queued_at = null;
+    file.pause_requested = false;
+    file.bulk_last_activity_at = new Date();
     await file.save();
 
     TraceLogger.info(
@@ -1781,14 +1918,17 @@ exports.processChargeFile = catchAsync(async (req, res, next) => {
 
 // Queue management endpoints
 exports.getQueue = catchAsync(async (req, res, next) => {
-  const queue = await QPChargeFile.find({
-    status: { $in: ["PROCESSING", "QUEUED"] },
-    deleted_at: null,
-  })
-    .sort({ status: -1, queue_order: 1, queued_at: 1 })
-    .lean();
+  const [queue, globally_paused] = await Promise.all([
+    QPChargeFile.find({
+      status: { $in: ["PROCESSING", "QUEUED"] },
+      deleted_at: null,
+    })
+      .sort({ status: -1, queue_order: 1, queued_at: 1 })
+      .lean(),
+    getGloballyPaused(),
+  ]);
 
-  res.status(200).json({ status: "success", data: queue });
+  res.status(200).json({ status: "success", data: queue, globally_paused });
 });
 
 exports.updateQueue = catchAsync(async (req, res, next) => {
@@ -1882,6 +2022,151 @@ exports.removeFromQueue = catchAsync(async (req, res, next) => {
     .json({ status: "success", message: "File removed from queue" });
 });
 
+/** Cooperative pause: running bulk loop sets status PAUSED on next row boundary. */
+exports.pauseChargeFile = catchAsync(async (req, res) => {
+  const file = await QPChargeFile.findById(req.params.id);
+  if (!file || file.deleted_at) {
+    return res.status(404).json({ status: "error", message: "File not found" });
+  }
+  if (file.status === "PAUSED") {
+    return res.status(200).json({
+      status: "success",
+      message: "Already paused",
+      data: { status: file.status },
+    });
+  }
+  if (file.status !== "PROCESSING") {
+    return res.status(400).json({
+      status: "error",
+      message: "Only a file that is actively processing can be paused",
+    });
+  }
+  file.pause_requested = true;
+  await file.save();
+  return res.status(200).json({
+    status: "success",
+    message: "Pause requested; will stop after the current row finishes",
+    data: { pause_requested: true },
+  });
+});
+
+/** Resume a cooperatively paused file (same rules as POST …/process for PAUSED). */
+exports.resumeChargeFile = catchAsync(async (req, res, next) => {
+  const file = await QPChargeFile.findById(req.params.id);
+  if (!file || file.deleted_at) {
+    return res.status(404).json({ status: "error", message: "File not found" });
+  }
+  if (file.status !== "PAUSED") {
+    return res.status(400).json({
+      status: "error",
+      message:
+        "Only paused files can be resumed via this endpoint; use Process for other states",
+    });
+  }
+  return exports.processChargeFile(req, res, next);
+});
+
+exports.pauseGlobalQueue = catchAsync(async (req, res) => {
+  await setGloballyPaused(true);
+  res.status(200).json({ status: "success", globally_paused: true });
+});
+
+exports.resumeGlobalQueue = catchAsync(async (req, res) => {
+  await setGloballyPaused(false);
+  res.status(200).json({ status: "success", globally_paused: false });
+});
+
+/**
+ * Clear wedged PROCESSING after crash. Optional body: { reset_processing_instances: true }
+ * resets instance rows stuck in PROCESSING to PENDING (duplicate-charge risk if payment succeeded).
+ */
+exports.recoverStalledChargeFile = catchAsync(async (req, res) => {
+  const file = await QPChargeFile.findById(req.params.id);
+  if (!file || file.deleted_at) {
+    return res.status(404).json({ status: "error", message: "File not found" });
+  }
+  if (file.status !== "PROCESSING") {
+    return res.status(400).json({
+      status: "error",
+      message: "File is not in PROCESSING state",
+    });
+  }
+  const force = req.query.force === "true";
+  const lastActivity = file.bulk_last_activity_at || file.updatedAt;
+  const ageMs = lastActivity ? Date.now() - new Date(lastActivity).getTime() : Infinity;
+  if (!force && ageMs < BULK_STALL_MS) {
+    return res.status(400).json({
+      status: "error",
+      message:
+        "Run does not appear stalled yet; wait or pass ?force=true (and read duplicate-charge risk if resetting rows)",
+    });
+  }
+  file.status = "PAUSED";
+  file.pause_requested = false;
+  await file.save();
+
+  let resetCount = 0;
+  if (req.body?.reset_processing_instances === true) {
+    const result = await QPChargeInstance.updateMany(
+      {
+        charge_file_id: file._id,
+        status: "PROCESSING",
+        deleted_at: null,
+      },
+      {
+        $set: {
+          status: "PENDING",
+          status_reason:
+            "Reset from PROCESSING after stalled recovery — verify no duplicate charge before re-running",
+        },
+      },
+    );
+    resetCount = result.modifiedCount ?? 0;
+  }
+
+  res.status(200).json({
+    status: "success",
+    message:
+      "File moved to PAUSED; you can resume or reconcile counts. Resetting PROCESSING rows can duplicate charges if the gateway already captured payment.",
+    data: { status: "PAUSED", reset_processing_instances: resetCount },
+  });
+});
+
+/** Recompute success/declined/error/processed_rows/skipped_count from instances (canonical row truth). */
+exports.reconcileChargeFileCounts = catchAsync(async (req, res) => {
+  const fileId = req.params.id;
+  const file = await QPChargeFile.findById(fileId);
+  if (!file || file.deleted_at) {
+    return res.status(404).json({ status: "error", message: "File not found" });
+  }
+
+  const oid = new mongoose.Types.ObjectId(String(fileId));
+  const rows = await QPChargeInstance.aggregate([
+    { $match: { charge_file_id: oid, deleted_at: null } },
+    { $group: { _id: "$status", n: { $sum: 1 } } },
+  ]);
+  const by = Object.fromEntries(rows.map((r) => [r._id, r.n]));
+
+  const success_count = by.SUCCESS || 0;
+  const declined_count = by.DECLINED || 0;
+  const error_count = by.ERROR || 0;
+  const skipped_count = by.SKIPPED || 0;
+  const processed_rows = success_count + declined_count + error_count;
+
+  await QPChargeFile.findByIdAndUpdate(fileId, {
+    $set: {
+      success_count,
+      declined_count,
+      error_count,
+      skipped_count,
+      processed_rows,
+    },
+  });
+
+  const updated = await QPChargeFile.findById(fileId).lean();
+  res.status(200).json({ status: "success", data: updated });
+});
+
 async function normalizeQueueOrder() {
   const queuedFiles = await QPChargeFile.find({
     status: "QUEUED",
@@ -1898,18 +2183,68 @@ async function normalizeQueueOrder() {
 }
 
 async function processBulkRunAsync(file, runId, userId, userEmail) {
-  // Fetch pending instances in order
-  const instances = await QPChargeInstance.find({
-    charge_file_id: file._id,
-    status: "PENDING",
-    deleted_at: null,
-  }).sort({ row_number: 1 });
+  const fileId = file._id;
+  const fileNameForEmail = file.file_name || "Unknown file";
 
-  let success = 0,
-    declined = 0,
-    errCount = 0;
+  async function finishPausedCooperative() {
+    await QPChargeFile.findByIdAndUpdate(fileId, {
+      $set: { status: "PAUSED", pause_requested: false },
+    });
+    TraceLogger.info(
+      "CHARGE_FILE_PROCESS_PAUSED",
+      `Bulk run ${runId} paused cooperatively`,
+      {
+        run_id: runId,
+        actor_user_id: userId,
+        entity_id: fileId,
+      },
+    );
+  }
 
-  for (const instance of instances) {
+  let success = 0;
+  let declined = 0;
+  let errCount = 0;
+  let rowsThisRun = 0;
+
+  while (true) {
+    if (await getGloballyPaused()) {
+      await finishPausedCooperative();
+      return;
+    }
+
+    const fileSnap = await QPChargeFile.findById(fileId);
+    if (!fileSnap || fileSnap.deleted_at) {
+      return;
+    }
+    if (fileSnap.pause_requested) {
+      await finishPausedCooperative();
+      return;
+    }
+
+    const instance = await QPChargeInstance.findOne({
+      charge_file_id: fileId,
+      status: "PENDING",
+      deleted_at: null,
+    })
+      .sort({ row_number: 1 })
+      .exec();
+
+    if (!instance) {
+      break;
+    }
+
+    await touchBulkActivity(fileId);
+
+    if (await getGloballyPaused()) {
+      await finishPausedCooperative();
+      return;
+    }
+    const fileBeforeRow = await QPChargeFile.findById(fileId);
+    if (!fileBeforeRow || fileBeforeRow.pause_requested) {
+      await finishPausedCooperative();
+      return;
+    }
+
     instance.status = "PROCESSING";
     instance.last_run_id = runId;
     instance.requested_at = new Date();
@@ -1928,63 +2263,92 @@ async function processBulkRunAsync(file, runId, userId, userEmail) {
         : "Missing QP Username (required for terminal key lookup)";
       instance.completed_at = new Date();
       await instance.save();
+      await incrementFileChargeOutcome(fileId, "ERROR");
       errCount++;
-      continue;
+      rowsThisRun++;
+    } else {
+      const unencryptedTerminalKey = decrypt(creds.terminal_key);
+
+      try {
+        const { providerResult, responseBody, reqId } = await processCharge(
+          instance,
+          unencryptedTerminalKey,
+          runId,
+          userId,
+        );
+
+        instance.status = providerResult;
+        instance.status_reason =
+          responseBody?.message || responseBody?.reason || providerResult;
+        instance.provider_transaction_id =
+          responseBody?.transaction_id || responseBody?.id || null;
+        instance.provider_code = responseBody?.code;
+        instance.last_request_id = reqId;
+        instance.last_response_payload = responseBody;
+
+        if (providerResult === "SUCCESS") success++;
+        else if (providerResult === "DECLINED") declined++;
+        else errCount++;
+      } catch (e) {
+        instance.status = "ERROR";
+        instance.status_reason = "Exception: " + e.message;
+        instance.last_response_payload = { error_message: e.message };
+        errCount++;
+      }
+
+      instance.completed_at = new Date();
+      await instance.save();
+
+      const terminal =
+        instance.status === "SUCCESS"
+          ? "SUCCESS"
+          : instance.status === "DECLINED"
+            ? "DECLINED"
+            : "ERROR";
+      await incrementFileChargeOutcome(fileId, terminal);
+      rowsThisRun++;
     }
 
-    const unencryptedTerminalKey = decrypt(creds.terminal_key);
+    await touchBulkActivity(fileId);
 
-    try {
-      const { providerResult, responseBody, reqId } = await processCharge(
-        instance,
-        unencryptedTerminalKey,
-        runId,
-        userId,
-      );
-
-      instance.status = providerResult;
-      instance.status_reason =
-        responseBody?.message || responseBody?.reason || providerResult;
-      instance.provider_transaction_id =
-        responseBody?.transaction_id || responseBody?.id || null;
-      instance.provider_code = responseBody?.code;
-      instance.last_request_id = reqId;
-      instance.last_response_payload = responseBody;
-
-      if (providerResult === "SUCCESS") success++;
-      else if (providerResult === "DECLINED") declined++;
-      else errCount++;
-    } catch (e) {
-      instance.status = "ERROR";
-      instance.status_reason = "Exception: " + e.message;
-      instance.last_response_payload = { error_message: e.message };
-      errCount++;
+    if (await getGloballyPaused()) {
+      await finishPausedCooperative();
+      return;
+    }
+    const fileAfterRow = await QPChargeFile.findById(fileId);
+    if (fileAfterRow && fileAfterRow.pause_requested) {
+      await finishPausedCooperative();
+      return;
     }
 
-    instance.completed_at = new Date();
-    await instance.save();
-
-    // Delay between charges (5-10s) to avoid rate limits
-    const idx = instances.indexOf(instance);
-    if (idx >= 0 && idx < instances.length - 1) {
+    const hasMorePending = await QPChargeInstance.exists({
+      charge_file_id: fileId,
+      status: "PENDING",
+      deleted_at: null,
+    });
+    if (hasMorePending) {
       await delayBetweenCharges();
     }
   }
 
-  file.status = errCount > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
-  file.success_count += success;
-  file.declined_count += declined;
-  file.error_count += errCount;
-  file.processed_rows += instances.length;
+  const fileDoc = await QPChargeFile.findById(fileId);
+  if (!fileDoc || fileDoc.deleted_at) {
+    return;
+  }
 
-  if (userEmail) {
+  fileDoc.status =
+    fileDoc.error_count > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
+  fileDoc.pause_requested = false;
+  fileDoc.bulk_last_activity_at = new Date();
+
+  if (userEmail && rowsThisRun > 0) {
     try {
       await sendQPProcessCompletionEmail({
         to: userEmail,
         success: true,
-        count: instances.length,
-        fileName: file.file_name || "Unknown file",
-        chargeFileId: String(file._id),
+        count: rowsThisRun,
+        fileName: fileNameForEmail,
+        chargeFileId: String(fileId),
         successCount: success,
         declinedCount: declined,
         errorCount: errCount,
@@ -1995,9 +2359,8 @@ async function processBulkRunAsync(file, runId, userId, userEmail) {
     }
   }
 
-  // Generate and store compiled file after processing completes
   const allInstances = await QPChargeInstance.find({
-    charge_file_id: file._id,
+    charge_file_id: fileId,
     deleted_at: null,
   }).sort({ row_number: 1 });
 
@@ -2021,37 +2384,33 @@ async function processBulkRunAsync(file, runId, userId, userEmail) {
     const wb = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(wb, ws, "Compiled Results");
 
-    // Generate file path for compiled results
-    const compiledFileName = `compiled_${file._id}_${runId}.xlsx`;
+    const compiledFileName = `compiled_${fileId}_${runId}.xlsx`;
     const compiledFilePath = path.join(
       __dirname,
       "../../public/files",
       compiledFileName,
     );
 
-    // Ensure files directory exists
     fs.ensureDirSync(path.dirname(compiledFilePath));
 
-    // Write file
     xlsx.writeFile(wb, compiledFilePath);
 
-    file.compiled_storage_path = `/files/${compiledFileName}`;
+    fileDoc.compiled_storage_path = `/files/${compiledFileName}`;
   } catch (compileErr) {
     console.error("Error generating compiled file:", compileErr);
-    // Don't fail the bulk run if compilation fails, just log it
     TraceLogger.error(
       "CHARGE_FILE_COMPILE_ERROR",
       `Failed to generate compiled file`,
       compileErr,
       {
         run_id: runId,
-        entity_id: file._id,
+        entity_id: fileId,
         entity_type: "QPChargeFile",
       },
     );
   }
 
-  await file.save();
+  await fileDoc.save();
 
   TraceLogger.info(
     "CHARGE_FILE_PROCESS_END",
@@ -2059,17 +2418,16 @@ async function processBulkRunAsync(file, runId, userId, userEmail) {
     {
       run_id: runId,
       actor_user_id: userId,
-      entity_id: file._id,
+      entity_id: fileId,
       metadata: {
         success,
         declined,
         error_count: errCount,
-        processed_rows: instances.length,
+        processed_rows_this_run: rowsThisRun,
       },
     },
   );
 
-  // Start next queued file automatically
   try {
     await processNextQueuedFile(userId, userEmail);
   } catch (queueErr) {
@@ -2080,7 +2438,7 @@ async function processBulkRunAsync(file, runId, userId, userEmail) {
       queueErr,
       {
         run_id: runId,
-        entity_id: file._id,
+        entity_id: fileId,
       },
     );
   }
@@ -2088,6 +2446,10 @@ async function processBulkRunAsync(file, runId, userId, userEmail) {
 
 // helper: start next queued file from queue
 async function processNextQueuedFile(userId, userEmail) {
+  if (await getGloballyPaused()) {
+    return;
+  }
+
   const nextFile = await QPChargeFile.findOne({
     status: "QUEUED",
     deleted_at: null,
@@ -2104,6 +2466,8 @@ async function processNextQueuedFile(userId, userEmail) {
   nextFile.last_run_id = nextRunId;
   nextFile.queue_order = null;
   nextFile.queued_at = null;
+  nextFile.pause_requested = false;
+  nextFile.bulk_last_activity_at = new Date();
   await nextFile.save();
 
   TraceLogger.info(

@@ -258,9 +258,23 @@ app.get(
   fileController.getUploadStatus,
 );
 app.get(
+  "/api/upload/sessions/trash",
+  authenticateToken,
+  fileController.getTrashedUploadSessions,
+);
+app.get(
   "/api/upload/sessions",
   authenticateToken,
   fileController.getUserUploadSessions,
+);
+app.post(
+  "/api/upload/restore/:uploadId",
+  authenticateToken,
+  fileController.restoreUploadById,
+);
+app.post(
+  "/api/upload/purge-expired",
+  fileController.purgeExpiredDeletedUploads,
 );
 app.get(
   "/api/upload/files",
@@ -489,6 +503,21 @@ app.get(
   qpChargeController.getChargeFiles,
 );
 app.get(
+  "/api/qp-charge-files/queue",
+  authenticateToken,
+  qpChargeController.getQueue,
+);
+app.post(
+  "/api/qp-charge-files/queue/pause-global",
+  authenticateToken,
+  qpChargeController.pauseGlobalQueue,
+);
+app.post(
+  "/api/qp-charge-files/queue/resume-global",
+  authenticateToken,
+  qpChargeController.resumeGlobalQueue,
+);
+app.get(
   "/api/qp-charge-files/:id",
   authenticateToken,
   qpChargeController.getChargeFileById,
@@ -508,10 +537,25 @@ app.post(
   authenticateToken,
   qpChargeController.processChargeFile,
 );
-app.get(
-  "/api/qp-charge-files/queue",
+app.post(
+  "/api/qp-charge-files/:id/pause",
   authenticateToken,
-  qpChargeController.getQueue,
+  qpChargeController.pauseChargeFile,
+);
+app.post(
+  "/api/qp-charge-files/:id/resume",
+  authenticateToken,
+  qpChargeController.resumeChargeFile,
+);
+app.post(
+  "/api/qp-charge-files/:id/recover-stalled",
+  authenticateToken,
+  qpChargeController.recoverStalledChargeFile,
+);
+app.post(
+  "/api/qp-charge-files/:id/reconcile-counts",
+  authenticateToken,
+  qpChargeController.reconcileChargeFileCounts,
 );
 app.patch(
   "/api/qp-charge-files/:id/queue",

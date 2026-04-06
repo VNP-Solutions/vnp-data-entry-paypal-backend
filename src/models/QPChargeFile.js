@@ -20,6 +20,7 @@ const qpChargeFileSchema = new mongoose.Schema(
         "IMPORTED",
         "QUEUED",
         "PROCESSING",
+        "PAUSED",
         "COMPLETED",
         "COMPLETED_WITH_ERRORS",
         "FAILED",
@@ -40,6 +41,11 @@ const qpChargeFileSchema = new mongoose.Schema(
 
     compiled_storage_path: { type: String },
     last_run_id: { type: String, index: true },
+
+    /** Cooperative pause: loop checks this each row; cleared when entering PAUSED */
+    pause_requested: { type: Boolean, default: false },
+    /** Heartbeat for crash detection (updated during bulk run) */
+    bulk_last_activity_at: { type: Date, default: null },
 
     created_by: {
       type: mongoose.Schema.Types.ObjectId,
