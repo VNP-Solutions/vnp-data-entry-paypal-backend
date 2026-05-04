@@ -6,7 +6,7 @@
  * BOOKMARK LIST (landmarks in this file – search for "// MARK:")
  * ------------------------------------
  * Map Row to Instance
- *   mapRowToInstance: maps template row to QPChargeInstance (hotel_id, hotel_name, reservation_id, amount, card, billing, status). Handles Hotel Name, flexible column names.
+ *   mapRowToInstance: maps template row to QPChargeInstance (hotel_id, hotel_name, reservation_id, amount, card, billing, status). Requires QP Username and OTA Billing Name columns; flexible column names for other fields.
  * Import Charging Sheet (shared logic from path)
  *   importChargeFileFromPath: reads workbook, creates QPChargeFile, inserts QPChargeInstance per row.
  * Import Charging Sheet (HTTP handler)
@@ -157,19 +157,9 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     amount_numeric:
       parseFloat(getVal("Amount to charge", "amount", "Amount")) || null,
     currency: getVal("Currency", "Curency", "currency") || "USD",
-    // QP Username before OTA Billing Name: templates often have both; billing name may be
-    // "Expedia Group" while terminal lookup must use the per-hotel QP Username column.
-    user_id: getVal(
-      "QP Username",
-      "QP Username*",
-      "OTA Billing Name",
-      "OTA Billing Name*",
-      "Name",
-      "Username",
-      "User ID",
-      "user_id",
-      "Name ",
-    ),
+    // QP Username and OTA Billing Name are separate columns; both required. Terminal lookup uses user_id only.
+    user_id: getVal("QP Username", "QP Username*"),
+    ota_billing_name: getVal("OTA Billing Name", "OTA Billing Name*"),
 
     billing_address: {
       address_1: getVal("Address*", "Address", "Address 1", "address_1"),
@@ -320,16 +310,16 @@ const mapRowToInstance = (row, chargeFileId, rowNumber, fileName) => {
     }
   }
 
-  // Basic Validation (QP username required for terminal key lookup)
-  if (
-    !instance.user_id ||
-    !instance.reservation_id ||
-    !instance.amount_numeric ||
-    !fullPan
-  ) {
+  // Basic validation: QP username + OTA billing name + reservation + amount + card
+  const missing = [];
+  if (!instance.user_id) missing.push("QP Username");
+  if (!instance.ota_billing_name) missing.push("OTA Billing Name");
+  if (!instance.reservation_id) missing.push("reservation");
+  if (!instance.amount_numeric) missing.push("amount");
+  if (!fullPan) missing.push("card");
+  if (missing.length) {
     instance.status = "INVALID";
-    instance.status_reason =
-      "Missing required field (QP username, reservation, amount, or card).";
+    instance.status_reason = `Missing required field(s): ${missing.join(", ")}.`;
   }
 
   return instance;
@@ -841,13 +831,18 @@ exports.getChargeInstances = catchAsync(async (req, res, next) => {
     if (date_to) match.createdAt.$lte = new Date(date_to);
   }
 
-  // Text search across hotel_id, reservation_id, user_id (case-insensitive)
+  // Text search across hotel_id, reservation_id, user_id, ota_billing_name (case-insensitive)
   if (search && String(search).trim()) {
     const term = String(search)
       .trim()
       .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(term, "i");
-    match.$or = [{ hotel_id: re }, { reservation_id: re }, { user_id: re }];
+    match.$or = [
+      { hotel_id: re },
+      { reservation_id: re },
+      { user_id: re },
+      { ota_billing_name: re },
+    ];
   }
 
   const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
@@ -1292,7 +1287,8 @@ function instanceToExportRow(i) {
     "Card Number*": cardNumber,
     "Expire*": cardExpire,
     "Card CVV*": cardCvv,
-    "OTA Billing Name*": i.user_id ?? "",
+    // Stored billing name only — never fall back to QP Username (user_id).
+    "OTA Billing Name*": i.ota_billing_name != null ? String(i.ota_billing_name) : "",
     Address: i.billing_address?.address_1 ?? "",
     City: i.billing_address?.city ?? "",
     State: i.billing_address?.state ?? "",
@@ -1720,12 +1716,25 @@ exports.createAndProcessSingle = catchAsync(async (req, res, next) => {
   const user_id = (body.user_id || body.userId || body.qp_username || "")
     .toString()
     .trim();
+  const ota_billing_name = (
+    body.ota_billing_name ||
+    body.otaBillingName ||
+    ""
+  )
+    .toString()
+    .trim();
 
-  if (!user_id || !reservation_id || !amount_numeric || amount_numeric <= 0) {
+  if (
+    !user_id ||
+    !ota_billing_name ||
+    !reservation_id ||
+    !amount_numeric ||
+    amount_numeric <= 0
+  ) {
     return res.status(400).json({
       status: "error",
       message:
-        "user_id (QP username), reservation_id, and positive amount_numeric are required",
+        "user_id (QP username), ota_billing_name, reservation_id, and positive amount_numeric are required",
     });
   }
   if (!card_number || card_number.length < 13) {
@@ -1772,6 +1781,7 @@ exports.createAndProcessSingle = catchAsync(async (req, res, next) => {
     amount_numeric,
     currency,
     user_id,
+    ota_billing_name,
     ota: ota || undefined,
     vnp_work_id: vnp_work_id || undefined,
     portfolio: portfolio || undefined,
@@ -1916,17 +1926,36 @@ exports.processChargeFile = catchAsync(async (req, res, next) => {
   });
 });
 
+/** PROCESSING first, then PAUSED, then QUEUED; within group by queue_order, queued_at */
+function sortQueueFilesForResponse(files) {
+  const arr = Array.isArray(files) ? [...files] : [];
+  const priority = (s) =>
+    s.status === "PROCESSING" ? 0 : s.status === "PAUSED" ? 1 : 2;
+  arr.sort((a, b) => {
+    const pa = priority(a);
+    const pb = priority(b);
+    if (pa !== pb) return pa - pb;
+    const ao = a.queue_order != null ? a.queue_order : 999999;
+    const bo = b.queue_order != null ? b.queue_order : 999999;
+    if (ao !== bo) return ao - bo;
+    const ta = a.queued_at ? new Date(a.queued_at).getTime() : 0;
+    const tb = b.queued_at ? new Date(b.queued_at).getTime() : 0;
+    return ta - tb;
+  });
+  return arr;
+}
+
 // Queue management endpoints
 exports.getQueue = catchAsync(async (req, res, next) => {
-  const [queue, globally_paused] = await Promise.all([
+  const [raw, globally_paused] = await Promise.all([
     QPChargeFile.find({
-      status: { $in: ["PROCESSING", "QUEUED"] },
+      status: { $in: ["PROCESSING", "PAUSED", "QUEUED"] },
       deleted_at: null,
-    })
-      .sort({ status: -1, queue_order: 1, queued_at: 1 })
-      .lean(),
+    }).lean(),
     getGloballyPaused(),
   ]);
+
+  const queue = sortQueueFilesForResponse(raw);
 
   res.status(200).json({ status: "success", data: queue, globally_paused });
 });
@@ -1940,35 +1969,43 @@ exports.updateQueue = catchAsync(async (req, res, next) => {
     return res.status(404).json({ status: "error", message: "File not found" });
   }
 
-  if (file.status !== "QUEUED") {
-    return res
-      .status(400)
-      .json({ status: "error", message: "Only queued files can be reordered" });
+  if (file.status === "PROCESSING") {
+    return res.status(400).json({
+      status: "error",
+      message: "Cannot reorder a file that is actively processing",
+    });
   }
 
-  const queuedFiles = await QPChargeFile.find({
-    status: "QUEUED",
+  if (!["QUEUED", "PAUSED"].includes(file.status)) {
+    return res.status(400).json({
+      status: "error",
+      message: "Only queued or paused files can be reordered",
+    });
+  }
+
+  const reorderableFiles = await QPChargeFile.find({
+    status: { $in: ["QUEUED", "PAUSED"] },
     deleted_at: null,
   })
     .sort({ queue_order: 1, queued_at: 1 })
     .exec();
 
-  const index = queuedFiles.findIndex((item) => item._id.equals(file._id));
+  const index = reorderableFiles.findIndex((item) => item._id.equals(file._id));
   if (index === -1) {
     return res
       .status(400)
-      .json({ status: "error", message: "File not queued" });
+      .json({ status: "error", message: "File not in reorderable queue" });
   }
 
   if (action === "up" && index > 0) {
-    const prev = queuedFiles[index - 1];
+    const prev = reorderableFiles[index - 1];
     const tmp = file.queue_order;
     file.queue_order = prev.queue_order;
     prev.queue_order = tmp;
     await file.save();
     await prev.save();
-  } else if (action === "down" && index < queuedFiles.length - 1) {
-    const next = queuedFiles[index + 1];
+  } else if (action === "down" && index < reorderableFiles.length - 1) {
+    const next = reorderableFiles[index + 1];
     const tmp = file.queue_order;
     file.queue_order = next.queue_order;
     next.queue_order = tmp;
@@ -1979,7 +2016,8 @@ exports.updateQueue = catchAsync(async (req, res, next) => {
     await file.save();
     await normalizeQueueOrder();
   } else if (action === "bottom") {
-    const maxOrder = queuedFiles[queuedFiles.length - 1]?.queue_order || 0;
+    const maxOrder =
+      reorderableFiles[reorderableFiles.length - 1]?.queue_order || 0;
     file.queue_order = maxOrder + 1;
     await file.save();
     await normalizeQueueOrder();
@@ -1987,12 +2025,11 @@ exports.updateQueue = catchAsync(async (req, res, next) => {
     return res.status(400).json({ status: "error", message: "Invalid action" });
   }
 
-  const updated = await QPChargeFile.find({
-    status: "QUEUED",
+  const allRaw = await QPChargeFile.find({
+    status: { $in: ["PROCESSING", "PAUSED", "QUEUED"] },
     deleted_at: null,
-  })
-    .sort({ queue_order: 1, queued_at: 1 })
-    .lean();
+  }).lean();
+  const updated = sortQueueFilesForResponse(allRaw);
 
   res.status(200).json({ status: "success", data: updated });
 });
@@ -2004,10 +2041,11 @@ exports.removeFromQueue = catchAsync(async (req, res, next) => {
     return res.status(404).json({ status: "error", message: "File not found" });
   }
 
-  if (file.status !== "QUEUED") {
-    return res
-      .status(400)
-      .json({ status: "error", message: "Only queued files can be removed" });
+  if (!["QUEUED", "PAUSED"].includes(file.status)) {
+    return res.status(400).json({
+      status: "error",
+      message: "Only queued or paused files can be removed from the queue",
+    });
   }
 
   file.status = "CANCELLED";
@@ -2169,7 +2207,7 @@ exports.reconcileChargeFileCounts = catchAsync(async (req, res) => {
 
 async function normalizeQueueOrder() {
   const queuedFiles = await QPChargeFile.find({
-    status: "QUEUED",
+    status: { $in: ["QUEUED", "PAUSED"] },
     deleted_at: null,
   })
     .sort({ queue_order: 1, queued_at: 1 })

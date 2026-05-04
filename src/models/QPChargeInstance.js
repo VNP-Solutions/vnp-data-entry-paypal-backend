@@ -11,7 +11,7 @@
  * Carry-through fields (From XLSX)
  *   ota, vnp_work_id, portfolio from template.
  * Payment Identity
- *   hotel_id, hotel_name, reservation_id, amount_numeric, currency, user_id.
+ *   hotel_id, hotel_name, reservation_id, amount_numeric, currency, user_id (QP username for terminal), ota_billing_name.
  * Billing Address
  *   address_1, address_2, city, state, postal_code, country_code.
  * Card Details (Masked and Encrypted)
@@ -54,8 +54,9 @@ const qpChargeInstanceSchema = new mongoose.Schema({
   reservation_id: { type: String, index: true },
   amount_numeric: { type: Number },
   currency: { type: String, default: 'USD' },
-  user_id: { type: String }, // Extracted from excel, not objectId
-  
+  user_id: { type: String }, // QP Username from template — terminal key lookup
+  ota_billing_name: { type: String }, // OTA Billing Name column — sent as QuantumPay account.first_name (not top-level user_id)
+
   // Billing Address
   billing_address: {
     address_1: { type: String },

@@ -1,3 +1,4 @@
+const xlsx = require("xlsx");
 const QPPaymentAttempt = require("../models/QPPaymentAttempt");
 const SystemLog = require("../models/SystemLog");
 
@@ -5,13 +6,14 @@ const catchAsync = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
 
-// MARK: 1. Get Payment Attempts with filters
-// 1. Get Payment Attempts with date range filtering, pagination and search
-exports.getPaymentAttempts = catchAsync(async (req, res, next) => {
-  const { charge_instance_id, run_id, result, date_from, date_to, search } = req.query;
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
-  const skip = (page - 1) * limit;
+/**
+ * Build Mongo match for payment attempts list/export (same filters).
+ * @param {Record<string, string | undefined>} query
+ * @returns {Promise<Record<string, unknown>>}
+ */
+async function buildPaymentAttemptsMatch(query) {
+  const { charge_instance_id, run_id, result, date_from, date_to, search } =
+    query;
 
   const match = {};
 
@@ -19,33 +21,105 @@ exports.getPaymentAttempts = catchAsync(async (req, res, next) => {
   if (run_id) match.run_id = run_id;
   if (result) match.result = result;
 
-  // Date range filtering
   if (date_from || date_to) {
     match.createdAt = {};
     if (date_from) match.createdAt.$gte = new Date(date_from);
     if (date_to) match.createdAt.$lte = new Date(date_to);
   }
 
-  // Search logic across technical IDs and related ChargeInstance data
   if (search) {
-    // Dynamically require QPChargeInstance to avoid circular dependency if any
     const QPChargeInstance = require("../models/QPChargeInstance");
     const matchingInstances = await QPChargeInstance.find({
       $or: [
         { reservation_id: { $regex: search, $options: "i" } },
         { hotel_name: { $regex: search, $options: "i" } },
-        { hotel_id: { $regex: search, $options: "i" } }
-      ]
+        { hotel_id: { $regex: search, $options: "i" } },
+      ],
     }).select("_id");
-    
-    const instanceIds = matchingInstances.map(i => i._id);
+
+    const instanceIds = matchingInstances.map((i) => i._id);
 
     match.$or = [
       { request_id: { $regex: search, $options: "i" } },
       { run_id: { $regex: search, $options: "i" } },
-      { charge_instance_id: { $in: instanceIds } }
+      { charge_instance_id: { $in: instanceIds } },
     ];
   }
+
+  return match;
+}
+
+function mapAttemptToExportRow(attempt) {
+  const body = attempt.response_body;
+  const rb =
+    body && typeof body === "object" && !Array.isArray(body) ? body : {};
+  const proc =
+    rb.processor && typeof rb.processor === "object" && !Array.isArray(rb.processor)
+      ? rb.processor
+      : {};
+  const inst = attempt.charge_instance_id;
+  const instObj =
+    inst && typeof inst === "object" && inst !== null && "reservation_id" in inst
+      ? inst
+      : {};
+
+  const ti = proc.transaction_identifier;
+  const tiTrimmed =
+    typeof ti === "string"
+      ? ti.trim()
+      : ti != null && ti !== ""
+        ? String(ti).trim()
+        : "";
+
+  const createdAt = attempt.createdAt;
+  const attemptAt =
+    createdAt instanceof Date
+      ? createdAt.toISOString()
+      : createdAt
+        ? new Date(createdAt).toISOString()
+        : "";
+
+  return {
+    "Attempt At": attemptAt,
+    Result: attempt.result ?? "",
+    "Http Status":
+      attempt.response_status_code != null
+        ? attempt.response_status_code
+        : "",
+    "Request ID": attempt.request_id ?? "",
+    "Run ID": attempt.run_id ?? "",
+    "Actor Email": attempt.created_by?.email ?? "",
+    "Reservation ID": instObj.reservation_id ?? "",
+    Amount:
+      instObj.amount_numeric != null && instObj.amount_numeric !== ""
+        ? instObj.amount_numeric
+        : "",
+    Currency: instObj.currency ?? "",
+    "QP Username": instObj.user_id ?? "",
+    "OTA Billing Name": instObj.ota_billing_name ?? "",
+    "Card Last 4": instObj.card_last4 ?? "",
+    "Processor message": proc.message ?? "",
+    "Approval code": proc.approval_code ?? "",
+    "Transaction identifier": tiTrimmed,
+    "Retrieval reference number": proc.retrieval_reference_number ?? "",
+    "Payment ID": rb.payment_id ?? "",
+    "Transaction ID": rb.transaction_id ?? rb.id ?? "",
+    Action: rb.action ?? "",
+    Code: rb.code ?? "",
+    "Response message": rb.message ?? "",
+    Status: rb.status ?? "",
+    "Timestamp UTC": rb.timestamp_utc ?? "",
+  };
+}
+
+// MARK: 1. Get Payment Attempts with filters
+// 1. Get Payment Attempts with date range filtering, pagination and search
+exports.getPaymentAttempts = catchAsync(async (req, res, next) => {
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = parseInt(req.query.limit, 10) || 10;
+  const skip = (page - 1) * limit;
+
+  const match = await buildPaymentAttemptsMatch(req.query);
 
   const total = await QPPaymentAttempt.countDocuments(match);
   const attempts = await QPPaymentAttempt.find(match)
@@ -53,20 +127,57 @@ exports.getPaymentAttempts = catchAsync(async (req, res, next) => {
     .skip(skip)
     .limit(limit)
     .populate("created_by", "name email")
-    .populate("charge_instance_id", "reservation_id hotel_name hotel_id amount_numeric currency status");
+    .populate(
+      "charge_instance_id",
+      "reservation_id hotel_name hotel_id amount_numeric currency status",
+    );
 
-  res.status(200).json({ 
-    status: "success", 
+  res.status(200).json({
+    status: "success",
     data: {
       attempts,
       pagination: {
         total,
         page,
         limit,
-        pages: Math.ceil(total / limit)
-      }
-    } 
+        pages: Math.ceil(total / limit),
+      },
+    },
   });
+});
+
+// MARK: 1b. Export payment attempts as .xlsx (same filters as list, no pagination)
+exports.exportPaymentAttempts = catchAsync(async (req, res, next) => {
+  const match = await buildPaymentAttemptsMatch(req.query);
+
+  // No row cap: exports all documents matching filters. Very large sets use more RAM
+  // and time (full cursor + in-memory workbook); use date/search filters if needed.
+  const attempts = await QPPaymentAttempt.find(match)
+    .sort({ createdAt: -1 })
+    .populate("created_by", "name email")
+    .populate(
+      "charge_instance_id",
+      "reservation_id hotel_name hotel_id amount_numeric currency status user_id ota_billing_name card_last4",
+    )
+    .lean();
+
+  const rows = attempts.map((a) => mapAttemptToExportRow(a));
+  const ws = xlsx.utils.json_to_sheet(rows);
+  const wb = xlsx.utils.book_new();
+  xlsx.utils.book_append_sheet(wb, ws, "Payment Attempts");
+  const buffer = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+
+  const pad = (n) => String(n).padStart(2, "0");
+  const d = new Date();
+  const dateStr = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+  const filename = `qp_payment_attempts_${dateStr}.xlsx`;
+
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.send(buffer);
 });
 
 // MARK: 2. Get Single Payment Attempt

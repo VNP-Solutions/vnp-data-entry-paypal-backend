@@ -638,6 +638,11 @@ app.get(
   qpLogController.getPaymentAttempts,
 );
 app.get(
+  "/api/qp-payment-attempts/export",
+  authenticateToken,
+  qpLogController.exportPaymentAttempts,
+);
+app.get(
   "/api/qp-payment-attempts/:id",
   authenticateToken,
   qpLogController.getPaymentAttemptById,

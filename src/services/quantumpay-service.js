@@ -81,9 +81,11 @@ function buildPayload(instance, unencryptedPan, unencryptedCvv) {
     ? parseInt(instance.expiry_year.toString().slice(-2), 10)
     : 25;
 
+  const billingDisplayName = String(instance.ota_billing_name || "").trim();
   const payload = {
     account: {
-      first_name: instance.ota || "Expedia Group",
+      // OTA billing name from the sheet (legal/merchant billing identity), not the short OTA Name column.
+      first_name: billingDisplayName || "Expedia Group",
       last_name: "",
       card_security_code: unencryptedCvv || "",
       expiry_month: month,
